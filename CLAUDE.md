@@ -176,11 +176,116 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0007_hotel_policies.sql` | `hotel_policies` (config/políticas por hotel) + alta automática |
 | `0008_timeline_events.sql` | `timeline_events` (bitácora central, append-only) |
 | `0009_seed_roles_permissions.sql` | Catálogo inicial de permisos y roles de sistema |
+| `0010_room_types_rooms.sql` | `room_types`, `rooms` — prerequisito mínimo del futuro módulo Habitaciones |
+| `0011_leads.sql` | `leads` |
+| `0012_quotes.sql` | `quotes`, `quote_options` |
+| `0013_inventory_holds.sql` | `inventory_holds` |
+| `0014_reservations.sql` | `reservations`, `reservation_stays` |
+| `0015_inventory_blocks.sql` | `inventory_blocks` — tabla de verdad noche-a-noche para disponibilidad |
+| `0016_inventory_concurrency_functions.sql` | Algoritmo de concurrencia atómica: `attempt_inventory_hold()`, `confirm_reservation_from_hold()`, `release_hold()`, `cancel_reservation()`, `expire_stale_holds()`, `check_availability()` |
+| `0017_guarantees_payments.sql` | `guarantees`, `payments` |
+| `0018_deferred_foreign_keys.sql` | FKs que no se pudieron declarar antes de que existiera `reservations` |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
 haya agregado explícitamente — dar de baja algo es un cambio de `status`/`is_active`,
 no un borrado físico.
+
+## Reservaciones: decisiones de esquema (Módulo 02)
+
+Este módulo se construyó a partir de una especificación funcional propia
+(`MODULO_02_RESERVACIONES_spec_completa.md`) que en realidad contenía **dos
+versiones distintas y contradictorias** en el mismo archivo (una sección
+"v1.2 cerrada" con sus propios ADR-01..06, y una revisión independiente
+posterior, con su propio modelo y ADR-001..003, que corregía puntos de la
+primera). Se resolvió combinando lo mejor de ambas; documentar esto aquí es
+obligatorio para que ninguna sesión futura reabra estas decisiones sin
+saber que ya se compararon las dos alternativas.
+
+### Decisiones cerradas de esta implementación
+
+1. **Frontera Reservaciones / Recepción.** `reservations.status` es sólo
+   `confirmed | cancelled | no_show | completed` — **no** incluye
+   `checked_in`/`in_house`/`checked_out` como proponía la v1.2 original. Esos
+   estados son operación física y se agregan en el futuro módulo Recepción
+   como columnas nuevas sobre esta misma tabla, nunca como un rediseño.
+   Reservaciones entrega una reserva `confirmed`; Recepción la recibe.
+
+2. **Inventario en una sola tabla de verdad.** En vez de calcular
+   disponibilidad sumando por separado holds activos + reservas confirmadas +
+   bloqueos manuales (como proponía la v1.2 original), todo consumo de
+   inventario vive en **`inventory_blocks`**: una fila = una unidad de
+   `room_type` consumida en una fecha, con `block_type` ∈
+   `hold | reservation | maintenance | overbooking`. Esto es lo que permite
+   que `attempt_inventory_hold()` sea una operación atómica real contra una
+   sola tabla, en vez de una condición de carrera entre varias.
+
+3. **"Sin garantía" nunca es un tipo de Garantía.** `guarantees.type` sólo
+   admite `card_hold | cash_deposit` (decisión cerrada explícita de la v1.2
+   original, §16.1 del spec). Que un hotel no requiera garantía es
+   `hotel_policies.requires_guarantee = false`, nunca una fila de garantía
+   con un tipo "ninguna". Si no hay garantía, el Hold se convierte en
+   Reserva con una confirmación explícita del huésped/staff, nunca por
+   aceptación automática de silencio.
+
+Todo lo demás del documento base (Hold como entidad independiente que nace
+**antes** de la condición de confirmación y nunca es un estado de Reserva;
+Cotización como snapshot inmutable que nunca compromete inventario;
+Reservation 1:N ReservationStay desde el modelo aunque la interfaz limite a
+una Estancia; tipo de cambio y política de cancelación congelados por
+snapshot) se implementó tal cual el spec original lo cierra — ver comentarios
+en cada migración `0010`-`0018` para el razonamiento completo.
+
+### El algoritmo de concurrencia (por qué es real, no sólo validación de app)
+
+`attempt_inventory_hold()` (ver `0016`) toma un
+`pg_advisory_xact_lock` por cada `(hotel_id, room_type_id, noche)` del rango
+solicitado **antes** de contar cuánto inventario queda. Cualquier otra
+transacción que compita por la misma noche se bloquea en Postgres hasta que
+la primera termina (commit o rollback) — momento en el que el conteo ya es
+definitivo. Esto convierte "verificar disponibilidad" + "bloquear
+inventario" en una sola operación atómica, no dos consultas separadas con
+una ventana de carrera en medio (spec S7-S8). Se probó localmente con dos
+transacciones concurrentes sobre la última unidad disponible: sólo una
+obtiene el Hold, la otra falla limpio con `NO_AVAILABILITY` (caso A de la
+matriz de concurrencia del spec, ver `supabase/migrations/0016...`).
+
+Por la misma razón, `inventory_holds`, `inventory_blocks` y `reservations`
+**no tienen política de INSERT/UPDATE para el cliente** — el único camino
+para escribir ahí es a través de las funciones `SECURITY DEFINER` de `0016`,
+que validan `has_permission()` manualmente porque al correr como su dueño no
+pasan por RLS (ver comentario en cada función). Nunca agregues una política
+de INSERT directa a estas tres tablas: rompería la garantía de atomicidad.
+
+### Alcance de esta sesión (qué NO se construyó todavía, a propósito)
+
+El spec original de Reservaciones incluye mucho más de lo que se pidió
+construir en esta sesión. Lo siguiente está modelado como catálogo cerrado
+donde es gratis hacerlo (ej. `leads.lost_reason`) pero **no tiene lógica ni
+UI todavía** — es evolución futura explícita, no un olvido:
+
+- Lista de espera (`WaitlistRequest`) y su reconexión automática.
+- `AlternativeSearchService` ("no perder la venta": categoría alterna,
+  upgrade, combinación de habitaciones, fechas cercanas).
+- `PermisoExcepcion`/`AuthorizationRequest` (autorización de descuentos y
+  excepciones por umbral) — hoy sólo existe el permiso binario
+  `reservations.create`/`reservations.cancel`/`payments.register` ya
+  sembrado desde la base del proyecto; no se agregaron permisos nuevos
+  porque esos tres ya cubren el flujo completo de este módulo.
+- Catálogo de mensajes automáticos al huésped (`CAT_MENSAJES_HUESPED`).
+- Campos de sincronización OTA (`source`, `sync_status`, etc.).
+- `CancellationPolicyEvaluator`/`RefundService`: `cancel_reservation()`
+  cancela y libera inventario, pero **no calcula reembolso** —
+  `cancellation_policy_snapshot` ya se guarda en la reserva para que ese
+  cálculo se agregue después sin rediseñar nada.
+- `folio_accounts` como tabla separada: en esta versión `payments` referencia
+  `reservation_id` directo. La entidad `FolioAccount` formal (para folios
+  divididos/grupales) es responsabilidad del futuro módulo Caja.
+- Liberación automática de Holds vencidos por cron: `expire_stale_holds()`
+  existe y se llama de forma perezosa (lazy) desde `check_availability()` y
+  `attempt_inventory_hold()`, pero en producción también debe llamarse
+  periódicamente (`pg_cron` o un cron externo) para que un Hold vencido
+  siempre genere señal visible aunque nadie vuelva a consultar disponibilidad.
 
 ## Convenciones de nombres
 
@@ -205,26 +310,29 @@ no un borrado físico.
 ```
 src/
   app/                    Rutas (App Router). Páginas y layouts.
-  middleware.ts           Refresca la sesión de Supabase en cada request.
+    login/                Login/signup mínimo con Supabase Auth (email+password).
+    reservaciones/        Página de prueba del módulo: buscar → cotizar → Hold → confirmar → listado.
+  proxy.ts                Refresca la sesión de Supabase en cada request (convención Next.js 16; reemplaza a middleware.ts).
   lib/
     supabase/
       client.ts           Cliente para Client Components (anon key).
       server.ts           Cliente para Server Components/Actions (anon key + cookies de sesión). Éste es el que usan los módulos.
       admin.ts             Cliente con service role (ignora RLS). Sólo para jobs de sistema, nunca para peticiones de usuario.
-      middleware.ts        Lógica de refresco de sesión usada por middleware.ts.
+      middleware.ts        Lógica de refresco de sesión usada por proxy.ts.
     auth/
       permissions.ts        requirePermission()/hasPermission(): capa de UX sobre has_permission() de Postgres.
+      session.ts             getCurrentUser()/getCurrentUserHotel(): usuario y hotel "actual" (primera fila activa en user_hotel_roles).
     events/
       timeline.ts           logTimelineEvent(): único punto de escritura a timeline_events.
   modules/
-    reservaciones/ rack/ recepcion/ habitaciones/ caja/
-      actions/             Server Actions (mutaciones): requirePermission() -> mutación -> logTimelineEvent().
-      queries/             Lecturas server-side para Server Components.
-      components/          UI específica del módulo.
+    reservaciones/
+      actions/             quote.ts, hold.ts, confirm.ts — requirePermission() -> RPC atómica o mutación -> logTimelineEvent().
+      queries/             availability.ts, reservations.ts, leads.ts, details.ts — lecturas server-side.
+    rack/ recepcion/ habitaciones/ caja/  (carpetas listas, sin lógica todavía)
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.
   types/
-    database.types.ts      Tipos de la base de datos. Regenerar con el CLI de Supabase en cuanto exista un proyecto real (instrucciones en el propio archivo).
+    database.types.ts      Tipos de la base de datos. Regenerar con el CLI de Supabase en cuanto haya forma de correr `supabase gen types` contra el proyecto real (instrucciones en el propio archivo).
 supabase/
   config.toml             Config del CLI de Supabase.
   migrations/              Esquema completo, incremental, comentado (ver tabla arriba).

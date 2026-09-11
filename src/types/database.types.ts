@@ -197,6 +197,374 @@ export interface Database {
         Update: never;
         Relationships: [];
       };
+      room_types: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          name: string;
+          code: string;
+          capacity_adults: number;
+          capacity_children: number;
+          accepts_pets: boolean;
+          is_active: boolean;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          name: string;
+          code: string;
+          capacity_adults?: number;
+          capacity_children?: number;
+          accepts_pets?: boolean;
+          is_active?: boolean;
+        };
+        Update: Partial<Database["public"]["Tables"]["room_types"]["Insert"]>;
+        Relationships: [];
+      };
+      rooms: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_type_id: string;
+          code: string;
+          is_active: boolean;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          room_type_id: string;
+          code: string;
+          is_active?: boolean;
+        };
+        Update: Partial<Database["public"]["Tables"]["rooms"]["Insert"]>;
+        Relationships: [];
+      };
+      leads: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          guest_name: string;
+          guest_email: string | null;
+          guest_phone: string | null;
+          pax_adults: number;
+          pax_children: number;
+          has_pets: boolean;
+          desired_check_in: string | null;
+          desired_check_out: string | null;
+          desired_room_type_id: string | null;
+          channel: string;
+          status: string;
+          lost_reason: string | null;
+          reservation_id: string | null;
+          first_contact_at: string;
+          last_interaction_at: string;
+          next_action_at: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          guest_name: string;
+          guest_email?: string | null;
+          guest_phone?: string | null;
+          pax_adults?: number;
+          pax_children?: number;
+          has_pets?: boolean;
+          desired_check_in?: string | null;
+          desired_check_out?: string | null;
+          desired_room_type_id?: string | null;
+          channel?: string;
+          status?: string;
+          lost_reason?: string | null;
+          next_action_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["leads"]["Insert"]>;
+        Relationships: [];
+      };
+      quotes: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          lead_id: string;
+          status: string;
+          currency: string;
+          cancellation_policy_snapshot: Json;
+          price_valid_until: string;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          lead_id: string;
+          status?: string;
+          currency?: string;
+          cancellation_policy_snapshot?: Json;
+          price_valid_until: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["quotes"]["Insert"]>;
+        Relationships: [
+          {
+            foreignKeyName: "quotes_lead_id_fkey";
+            columns: ["lead_id"];
+            isOneToOne: false;
+            referencedRelation: "leads";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      quote_options: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          quote_id: string;
+          room_type_id: string;
+          check_in: string;
+          check_out: string;
+          adults: number;
+          children: number;
+          has_pets: boolean;
+          subtotal: number;
+          taxes: number;
+          total: number;
+          rules_applied: Json;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          quote_id: string;
+          room_type_id: string;
+          check_in: string;
+          check_out: string;
+          adults?: number;
+          children?: number;
+          has_pets?: boolean;
+          subtotal: number;
+          taxes?: number;
+          total: number;
+          rules_applied?: Json;
+        };
+        Update: Partial<Database["public"]["Tables"]["quote_options"]["Insert"]>;
+        Relationships: [
+          {
+            foreignKeyName: "quote_options_quote_id_fkey";
+            columns: ["quote_id"];
+            isOneToOne: false;
+            referencedRelation: "quotes";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "quote_options_room_type_id_fkey";
+            columns: ["room_type_id"];
+            isOneToOne: false;
+            referencedRelation: "room_types";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      inventory_holds: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_type_id: string;
+          quote_option_id: string | null;
+          check_in: string;
+          check_out: string;
+          status: string;
+          expires_at: string;
+          converted_reservation_id: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "inventory_holds_room_type_id_fkey";
+            columns: ["room_type_id"];
+            isOneToOne: false;
+            referencedRelation: "room_types";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "inventory_holds_quote_option_id_fkey";
+            columns: ["quote_option_id"];
+            isOneToOne: false;
+            referencedRelation: "quote_options";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      inventory_blocks: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_type_id: string;
+          stay_date: string;
+          block_type: string;
+          hold_id: string | null;
+          reservation_stay_id: string | null;
+          created_at: string;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      reservations: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          folio: string;
+          lead_id: string | null;
+          quote_id: string | null;
+          hold_id: string | null;
+          primary_guest_name: string;
+          primary_guest_email: string | null;
+          primary_guest_phone: string | null;
+          channel: string;
+          status: string;
+          cancellation_policy_snapshot: Json;
+          cancelled_at: string | null;
+          cancellation_reason: string | null;
+          refund_amount: number | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: {
+          primary_guest_name?: string;
+          primary_guest_email?: string | null;
+          primary_guest_phone?: string | null;
+        };
+        Relationships: [];
+      };
+      reservation_stays: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          reservation_id: string;
+          room_type_id: string;
+          room_id: string | null;
+          check_in: string;
+          check_out: string;
+          adults: number;
+          children: number;
+          has_pets: boolean;
+          rate_total: number;
+          estimated_arrival_time: string | null;
+          notes_guest: string | null;
+          notes_internal: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: {
+          room_id?: string | null;
+          notes_guest?: string | null;
+          notes_internal?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "reservation_stays_reservation_id_fkey";
+            columns: ["reservation_id"];
+            isOneToOne: false;
+            referencedRelation: "reservations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "reservation_stays_room_type_id_fkey";
+            columns: ["room_type_id"];
+            isOneToOne: false;
+            referencedRelation: "room_types";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      guarantees: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          reservation_id: string;
+          type: string;
+          amount: number;
+          currency: string;
+          status: string;
+          released_at: string | null;
+          charged_at: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          reservation_id: string;
+          type: string;
+          amount: number;
+          currency?: string;
+          status?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["guarantees"]["Insert"]>;
+        Relationships: [];
+      };
+      payments: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          reservation_id: string;
+          type: string;
+          amount: number;
+          currency: string;
+          exchange_rate_applied: number;
+          amount_local: number;
+          method: string;
+          status: string;
+          receipt_url: string | null;
+          notes: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          reservation_id: string;
+          type: string;
+          amount: number;
+          currency?: string;
+          exchange_rate_applied?: number;
+          amount_local: number;
+          method: string;
+          status?: string;
+          receipt_url?: string | null;
+          notes?: string | null;
+        };
+        Update: never;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -207,6 +575,59 @@ export interface Database {
       has_permission: {
         Args: { p_hotel_id: string; p_permission_code: string };
         Returns: boolean;
+      };
+      check_availability: {
+        Args: {
+          p_hotel_id: string;
+          p_room_type_id: string;
+          p_check_in: string;
+          p_check_out: string;
+        };
+        Returns: {
+          stay_date: string;
+          total_units: number;
+          blocked_units: number;
+          available_units: number;
+        }[];
+      };
+      attempt_inventory_hold: {
+        Args: {
+          p_hotel_id: string;
+          p_room_type_id: string;
+          p_check_in: string;
+          p_check_out: string;
+          p_quote_option_id?: string | null;
+          p_hold_minutes?: number | null;
+        };
+        Returns: Database["public"]["Tables"]["inventory_holds"]["Row"];
+      };
+      confirm_reservation_from_hold: {
+        Args: {
+          p_hold_id: string;
+          p_primary_guest_name: string;
+          p_primary_guest_email?: string | null;
+          p_primary_guest_phone?: string | null;
+          p_channel?: string;
+          p_rate_total?: number;
+          p_cancellation_policy_snapshot?: Json;
+          p_adults?: number;
+          p_children?: number;
+          p_has_pets?: boolean;
+          p_estimated_arrival_time?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["reservations"]["Row"];
+      };
+      release_hold: {
+        Args: { p_hold_id: string };
+        Returns: undefined;
+      };
+      cancel_reservation: {
+        Args: { p_reservation_id: string; p_reason?: string | null };
+        Returns: Database["public"]["Tables"]["reservations"]["Row"];
+      };
+      expire_stale_holds: {
+        Args: Record<PropertyKey, never>;
+        Returns: number;
       };
     };
     Enums: Record<string, never>;
