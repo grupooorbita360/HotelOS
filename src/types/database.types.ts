@@ -937,6 +937,10 @@ export interface Database {
         Args: { p_hotel_id: string; p_email: string };
         Returns: string | null;
       };
+      assign_room_for_checkin: {
+        Args: { p_stay_id: string; p_room_id: string };
+        Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

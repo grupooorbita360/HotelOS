@@ -30,10 +30,16 @@ export async function checkIn(hotelId: string, stayId: string) {
   return data;
 }
 
-export async function assignRoom(hotelId: string, stayId: string, roomId: string) {
+/**
+ * Asigna una habitación permitiendo upgrade (0032, `assign_room_for_checkin`):
+ * si el room_type de la habitación elegida es distinto al vendido y su
+ * tarifa base es mayor, la función SQL cobra la diferencia x noches como un
+ * cargo real en la cuenta -- no hay lógica de precio aquí, sólo se delega.
+ */
+export async function assignRoomForCheckin(hotelId: string, stayId: string, roomId: string) {
   await requirePermission(hotelId, "room.change");
   const supabase = await createClient();
-  const { data, error } = await supabase.rpc("assign_room", { p_stay_id: stayId, p_room_id: roomId });
+  const { data, error } = await supabase.rpc("assign_room_for_checkin", { p_stay_id: stayId, p_room_id: roomId });
   if (error) throw error;
   await logTimelineEvent({
     hotelId,

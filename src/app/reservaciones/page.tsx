@@ -22,6 +22,7 @@ import {
   submitReleaseHold,
   submitConfirmReservation,
   submitCancelReservation,
+  submitRegisterAdditionalPayment,
 } from "./actions";
 
 export default async function ReservacionesPage({
@@ -79,6 +80,15 @@ export default async function ReservacionesPage({
   const reservationDetail = params.reservationId ? await getReservationDetails(hotel.hotelId, params.reservationId) : null;
   const leadDetail = params.leadId ? leads.find((l) => l.id === params.leadId) : null;
 
+  // Estado de cuenta derivado -- nunca un contador guardado a mano (principio 5).
+  const totalHospedaje = reservationDetail
+    ? reservationDetail.reservation_stays.reduce((sum, s) => sum + Number(s.rate_total), 0)
+    : 0;
+  const totalPagado = reservationDetail
+    ? reservationDetail.payments.filter((p) => p.status === "completed").reduce((sum, p) => sum + Number(p.amount), 0)
+    : 0;
+  const saldoPendiente = Math.max(0, Math.round((totalHospedaje - totalPagado) * 100) / 100);
+
   const todayIso = new Date().toISOString().slice(0, 10);
   const searchDateError =
     params.checkIn && params.checkOut
@@ -121,58 +131,121 @@ export default async function ReservacionesPage({
 
         <div className="space-y-2">
           {params.error && <Banner tone="danger">{params.error}</Banner>}
-          {params.confirmed && <Banner tone="success">Reserva confirmada.</Banner>}
           {params.cancelled && <Banner tone="warning">Reserva cancelada, inventario liberado.</Banner>}
         </div>
 
-        {/* Detalle de una reserva (clic desde el listado) */}
+        {/* Expediente de la reserva: aparece al confirmar y al hacer clic desde el listado */}
         {reservationDetail && (
-          <Card className="space-y-3">
-            <div className="flex items-center justify-between">
-              <CardTitle>
-                Reserva {reservationDetail.folio} — {reservationDetail.primary_guest_name}
-              </CardTitle>
-              <ReservationStatusBadge status={reservationDetail.status} />
+          <div className="space-y-4">
+            {params.confirmed && (
+              <Banner tone="success">Reserva confirmada. Estos son los siguientes pasos.</Banner>
+            )}
+
+            <Card className="space-y-1">
+              <div className="flex items-center justify-between">
+                <CardTitle>
+                  Folio {reservationDetail.folio} · {reservationDetail.primary_guest_name}
+                </CardTitle>
+                <ReservationStatusBadge status={reservationDetail.status} />
+              </div>
+              <p className="text-xs text-muted">Creada {formatDate(reservationDetail.created_at)} · canal: {reservationDetail.channel}</p>
+            </Card>
+
+            <div className="grid grid-cols-3 gap-4">
+              <Card className="space-y-1">
+                <p className="text-xs font-semibold uppercase text-muted">Huésped</p>
+                <p className="font-medium text-foreground">{reservationDetail.primary_guest_name}</p>
+                <p className="text-muted">{reservationDetail.primary_guest_phone || "sin teléfono"}</p>
+                <p className="text-muted">{reservationDetail.primary_guest_email || "sin correo"}</p>
+              </Card>
+              <Card className="space-y-1">
+                <p className="text-xs font-semibold uppercase text-muted">Estancia</p>
+                {reservationDetail.reservation_stays.map((s, i) => (
+                  <div key={i}>
+                    <p className="font-medium text-foreground">{s.room_types?.name}</p>
+                    <p className="text-muted">{formatDateRange(s.check_in, s.check_out)}</p>
+                    <p className="text-muted">
+                      {s.adults} adultos, {s.children} niños{s.has_pets ? " · con mascota" : ""}
+                    </p>
+                  </div>
+                ))}
+              </Card>
+              <Card className="space-y-1">
+                <p className="text-xs font-semibold uppercase text-muted">Estado de cuenta</p>
+                <p className="text-muted">Total hospedaje: ${totalHospedaje}</p>
+                <p className="text-muted">Pagado: ${totalPagado}</p>
+                <p className="font-semibold text-foreground">Saldo: ${saldoPendiente}</p>
+              </Card>
             </div>
-            <p className="text-muted">
-              {reservationDetail.primary_guest_email || "sin correo"} · {reservationDetail.primary_guest_phone || "sin teléfono"} · canal:{" "}
-              {reservationDetail.channel}
-            </p>
-            {reservationDetail.reservation_stays.map((s, i) => (
-              <p key={i} className="text-muted-strong">
-                <strong className="text-foreground">{s.room_types?.name}</strong> · {formatDateRange(s.check_in, s.check_out)} ·{" "}
-                {s.adults} adultos, {s.children} niños{s.has_pets ? " · con mascota" : ""} · ${s.rate_total}
-              </p>
-            ))}
-            {reservationDetail.guarantees.length > 0 && (
-              <div>
-                <p className="font-medium text-foreground">Garantías</p>
-                {reservationDetail.guarantees.map((g, i) => (
-                  <p key={i} className="text-muted">
-                    {g.type} · ${g.amount} {g.currency} · {g.status}
-                  </p>
-                ))}
-              </div>
-            )}
-            {reservationDetail.payments.length > 0 && (
-              <div>
-                <p className="font-medium text-foreground">Pagos</p>
-                {reservationDetail.payments.map((p, i) => (
-                  <p key={i} className="text-muted">
-                    {formatDate(p.created_at)} · {p.type} · ${p.amount} {p.currency} ({p.method}) · {p.status}
-                  </p>
-                ))}
-              </div>
-            )}
-            {reservationDetail.status === "cancelled" && (
+
+            {reservationDetail.status === "cancelled" ? (
               <Banner tone="warning">{`Cancelada ${formatDate(reservationDetail.cancelled_at)}${
                 reservationDetail.cancellation_reason ? `: ${reservationDetail.cancellation_reason}` : ""
               }`}</Banner>
+            ) : saldoPendiente > 0 ? (
+              <Banner tone="warning">{`Saldo pendiente: antes del check-out se debe cobrar $${saldoPendiente}.`}</Banner>
+            ) : (
+              <Banner tone="success">Cuenta saldada. Todo listo para recibir al huésped.</Banner>
             )}
+
+            {reservationDetail.status === "confirmed" && (
+              <Card className="space-y-3">
+                <CardTitle>¿Qué sigue?</CardTitle>
+                <div className="flex flex-wrap gap-2">
+                  <Link href="/recepcion">
+                    <Button variant="secondary">Ir a Recepción</Button>
+                  </Link>
+                  <Link href="/reservaciones">
+                    <Button variant="secondary">Nueva venta</Button>
+                  </Link>
+                </div>
+                {saldoPendiente > 0 && (
+                  <form action={submitRegisterAdditionalPayment} className="flex flex-wrap items-end gap-3 border-t border-border pt-3">
+                    <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                    <input type="hidden" name="reservationId" value={reservationDetail.id} />
+                    <Field label="Registrar pago">
+                      <TextInput name="amount" type="number" min={0.01} step="0.01" defaultValue={saldoPendiente} />
+                    </Field>
+                    <Field label="Método">
+                      <Select name="method" defaultValue="card">
+                        <option value="card">Tarjeta</option>
+                        <option value="transfer">Transferencia</option>
+                      </Select>
+                    </Field>
+                    <Field label="Tipo">
+                      <Select name="type" defaultValue="installment">
+                        <option value="installment">Abono</option>
+                        <option value="full_payment">Liquidación total</option>
+                      </Select>
+                    </Field>
+                    <Button>Registrar pago</Button>
+                  </form>
+                )}
+              </Card>
+            )}
+
+            <Card className="space-y-2">
+              <CardTitle>Historial</CardTitle>
+              <p className="text-muted">{formatDate(reservationDetail.created_at)} · Reserva confirmada</p>
+              {reservationDetail.payments.map((p, i) => (
+                <p key={i} className="text-muted">
+                  {formatDate(p.created_at)} · Pago registrado — ${p.amount} {p.currency} ({p.method === "card" ? "tarjeta" : "transferencia"})
+                </p>
+              ))}
+              {reservationDetail.status === "cancelled" && (
+                <p className="text-muted">{formatDate(reservationDetail.cancelled_at)} · Reserva cancelada</p>
+              )}
+            </Card>
+
+            <Card className="space-y-1">
+              <CardTitle>Notas</CardTitle>
+              <p className="text-muted">{reservationDetail.reservation_stays[0]?.notes_internal || "Sin notas registradas."}</p>
+            </Card>
+
             <Link href="/reservaciones" className="text-brand underline">
               Cerrar detalle
             </Link>
-          </Card>
+          </div>
         )}
 
         {/* Detalle de un lead (clic desde el listado) */}

@@ -23,9 +23,9 @@ export async function getReservationDetails(hotelId: string, reservationId: stri
     .select(
       `id, folio, primary_guest_name, primary_guest_email, primary_guest_phone, status, channel,
        cancelled_at, cancellation_reason, created_at,
-       reservation_stays(check_in, check_out, adults, children, has_pets, rate_total, room_types(name)),
+       reservation_stays(check_in, check_out, adults, children, has_pets, rate_total, notes_internal, room_types(name)),
        guarantees(type, amount, currency, status),
-       payments(type, amount, currency, method, status, created_at)`,
+       payments(id, type, amount, currency, method, status, created_at)`,
     )
     .eq("id", reservationId)
     .eq("hotel_id", hotelId)

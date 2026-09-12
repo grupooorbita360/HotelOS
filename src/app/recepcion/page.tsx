@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { signOut } from "@/app/login/actions";
 import { formatDateRange } from "@/lib/format";
-import { listStays, getStayDetails, listAssignableRooms, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
+import { listStays, getStayDetails, listRoomAssignmentOptions, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -13,8 +13,8 @@ import { StayStatusBadge, nextActionLabel } from "@/components/ui/Badge";
 import { AppShell } from "@/components/ui/AppShell";
 import {
   submitRegisterArrival,
-  submitCheckIn,
   submitAssignRoom,
+  submitCheckInWithRoom,
   submitDeliverRoom,
   submitMarkNoShow,
   submitMarkWalked,
@@ -31,7 +31,7 @@ import {
 export default async function RecepcionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ stayId?: string; error?: string }>;
+  searchParams: Promise<{ stayId?: string; error?: string; checkinStep?: string }>;
 }) {
   const params = await searchParams;
 
@@ -60,11 +60,40 @@ export default async function RecepcionPage({
   };
 
   const detail = params.stayId ? await getStayDetails(hotel.hotelId, params.stayId) : null;
-  const assignableRooms =
-    detail && !detail.activeAssignment
-      ? await listAssignableRooms(hotel.hotelId, detail.stay.reservation_stays!.room_type_id)
-      : [];
+
+  const needsRoomOptions =
+    !!detail &&
+    !detail.activeAssignment &&
+    (detail.stay.status === "arrived" || detail.stay.status === "checked_in");
+  const nights =
+    detail && detail.stay.reservation_stays
+      ? Math.max(
+          1,
+          Math.round(
+            (new Date(detail.stay.reservation_stays.check_out).getTime() -
+              new Date(detail.stay.reservation_stays.check_in).getTime()) /
+              86400000,
+          ),
+        )
+      : 1;
+  const roomOptions = needsRoomOptions
+    ? await listRoomAssignmentOptions(hotel.hotelId, detail!.stay.reservation_stays!.room_type_id, nights)
+    : [];
+  const equivalentOptions = roomOptions.filter((o) => o.kind === "equivalente");
+  const upgradeOptions = roomOptions.filter((o) => o.kind === "upgrade");
+
   const checkinAssets = detail ? await getHotelCheckinAssets(hotel.hotelId) : [];
+
+  // Estado de cuenta -- Saldo siempre viene de stay_accounts.balance (fuente
+  // real); Hospedaje/Extras/Pagado son un desglose informativo derivado de
+  // datos ya cargados, nunca recalculan el saldo mostrado.
+  const rateTotal = Number(detail?.stay.reservation_stays?.rate_total ?? 0);
+  const extrasCharged = detail
+    ? detail.transactions.filter((t) => t.type === "charge").reduce((sum, t) => sum + Number(t.amount), 0)
+    : 0;
+  const totalPagado = detail
+    ? -detail.transactions.filter((t) => t.type === "payment").reduce((sum, t) => sum + Number(t.amount), 0)
+    : 0;
 
   return (
     <AppShell
@@ -165,23 +194,16 @@ export default async function RecepcionPage({
                       </>
                     )}
                     {detail.stay.status === "arrived" && (
-                      <>
-                        <form action={submitCheckIn}>
-                          <input type="hidden" name="hotelId" value={hotel.hotelId} />
-                          <input type="hidden" name="stayId" value={detail.stay.id} />
-                          <Button>Hacer check-in</Button>
-                        </form>
-                        <form action={submitMarkWalked}>
-                          <input type="hidden" name="hotelId" value={hotel.hotelId} />
-                          <input type="hidden" name="stayId" value={detail.stay.id} />
-                          <Button
-                            variant="danger"
-                            title="El huésped llegó con reserva confirmada pero el hotel no tiene habitación para darle (ej. overbooking) y se le reubica en otro hotel."
-                          >
-                            Marcar Walked
-                          </Button>
-                        </form>
-                      </>
+                      <form action={submitMarkWalked}>
+                        <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                        <input type="hidden" name="stayId" value={detail.stay.id} />
+                        <Button
+                          variant="danger"
+                          title="El huésped llegó con reserva confirmada pero el hotel no tiene habitación para darle (ej. overbooking) y se le reubica en otro hotel."
+                        >
+                          Marcar Walked
+                        </Button>
+                      </form>
                     )}
                     {detail.stay.status === "checked_in" && detail.activeAssignment && (
                       <form action={submitDeliverRoom}>
@@ -200,23 +222,145 @@ export default async function RecepcionPage({
                   </div>
                 </Card>
 
-                {/* Asignar habitacion */}
+                {/* Flujo guiado de check-in: Recibir a {guest} — 1. Cuenta / 2. Habitación */}
+                {detail.stay.status === "arrived" && (
+                  <Card className="space-y-4">
+                    <CardTitle>
+                      Recibir a {detail.stay.reservation_stays!.reservations!.primary_guest_name} —{" "}
+                      {params.checkinStep === "habitacion" ? "2. Habitación" : "1. Cuenta"}
+                    </CardTitle>
+
+                    {params.checkinStep !== "habitacion" ? (
+                      <>
+                        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                          <div>
+                            <p className="text-xs uppercase text-muted">Hospedaje</p>
+                            <p className="font-semibold text-foreground">${rateTotal}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs uppercase text-muted">Extras y consumos</p>
+                            <p className="font-semibold text-foreground">${extrasCharged}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs uppercase text-muted">Pagado</p>
+                            <p className="font-semibold text-foreground">${totalPagado}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs uppercase text-muted">Saldo</p>
+                            <p className={`font-semibold ${(detail.stay.stay_accounts?.balance ?? 0) > 0 ? "text-danger" : "text-brand"}`}>
+                              ${detail.stay.stay_accounts?.balance ?? 0}
+                            </p>
+                          </div>
+                        </div>
+
+                        {(detail.stay.stay_accounts?.balance ?? 0) > 0 ? (
+                          <Banner tone="warning">{`Saldo pendiente: $${detail.stay.stay_accounts?.balance}.`}</Banner>
+                        ) : (
+                          <Banner tone="success">Cuenta al corriente.</Banner>
+                        )}
+
+                        <form action={submitRegisterTransaction} className="flex flex-wrap items-end gap-3 border-t border-border pt-3">
+                          <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                          <input type="hidden" name="stayId" value={detail.stay.id} />
+                          <input type="hidden" name="type" value="payment" />
+                          <input type="hidden" name="concept" value="Pago en check-in" />
+                          <Field label="Registrar pago">
+                            <TextInput name="amount" type="number" min={0.01} step="0.01" defaultValue={detail.stay.stay_accounts?.balance || undefined} />
+                          </Field>
+                          <Field label="Método">
+                            <Select name="method" defaultValue="cash">
+                              <option value="cash">Efectivo</option>
+                              <option value="card">Tarjeta</option>
+                              <option value="transfer">Transferencia</option>
+                            </Select>
+                          </Field>
+                          <Button>Registrar pago</Button>
+                        </form>
+
+                        <Link href={`/recepcion?stayId=${detail.stay.id}&checkinStep=habitacion`}>
+                          <Button>Continuar a Habitación</Button>
+                        </Link>
+                      </>
+                    ) : (
+                      <>
+                        {roomOptions.length === 0 ? (
+                          <Banner tone="warning">No hay habitaciones libres ahora mismo.</Banner>
+                        ) : (
+                          <form action={submitCheckInWithRoom} className="space-y-3">
+                            <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                            <input type="hidden" name="stayId" value={detail.stay.id} />
+                            <Field label="Habitación">
+                              <Select name="roomId" required>
+                                {equivalentOptions.length > 0 && (
+                                  <optgroup label="Equivalente (sin costo adicional)">
+                                    {equivalentOptions.map((o) => (
+                                      <option key={o.id} value={o.id}>
+                                        {o.code} · {o.roomTypeName}
+                                        {o.building ? ` · ${o.building}` : ""}
+                                        {o.bedType ? ` · ${o.bedType}` : ""}
+                                        {o.isClean ? "" : " (sucia)"}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                                {upgradeOptions.length > 0 && (
+                                  <optgroup label="Upgrade disponible">
+                                    {upgradeOptions.map((o) => (
+                                      <option key={o.id} value={o.id}>
+                                        {o.code} · {o.roomTypeName} — +${o.priceDiff}
+                                        {o.building ? ` · ${o.building}` : ""}
+                                        {o.bedType ? ` · ${o.bedType}` : ""}
+                                        {o.isClean ? "" : " (sucia)"}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                )}
+                              </Select>
+                            </Field>
+                            <p className="text-xs text-muted">
+                              Un upgrade cobra la diferencia de tarifa automáticamente a la cuenta de la estancia.
+                            </p>
+                            <Button>Asignar habitación y hacer Check-In</Button>
+                          </form>
+                        )}
+                        <Link href={`/recepcion?stayId=${detail.stay.id}`} className="text-muted underline">
+                          Regresar a Cuenta
+                        </Link>
+                      </>
+                    )}
+                  </Card>
+                )}
+
+                {/* Asignar habitacion (estancia ya con check-in pero sin habitacion, ej. tras liberar una asignacion) */}
                 {detail.stay.status === "checked_in" && !detail.activeAssignment && (
                   <Card className="space-y-3">
-                    <CardTitle>Asignar habitación (equivalente)</CardTitle>
-                    {assignableRooms.length === 0 ? (
-                      <Banner tone="warning">No hay habitaciones de este tipo disponibles ahora mismo.</Banner>
+                    <CardTitle>Asignar habitación</CardTitle>
+                    {roomOptions.length === 0 ? (
+                      <Banner tone="warning">No hay habitaciones libres ahora mismo.</Banner>
                     ) : (
                       <form action={submitAssignRoom} className="flex items-end gap-3">
                         <input type="hidden" name="hotelId" value={hotel.hotelId} />
                         <input type="hidden" name="stayId" value={detail.stay.id} />
                         <Field label="Habitación" className="flex-1">
                           <Select name="roomId" required>
-                            {assignableRooms.map((r) => (
-                              <option key={r.id} value={r.id}>
-                                {r.code} {r.is_clean ? "" : "(sucia)"}
-                              </option>
-                            ))}
+                            {equivalentOptions.length > 0 && (
+                              <optgroup label="Equivalente (sin costo adicional)">
+                                {equivalentOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} {o.isClean ? "" : "(sucia)"}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {upgradeOptions.length > 0 && (
+                              <optgroup label="Upgrade disponible">
+                                {upgradeOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} · {o.roomTypeName} — +${o.priceDiff}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
                           </Select>
                         </Field>
                         <Button>Asignar</Button>

@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import {
   registerArrival,
   checkIn,
-  assignRoom,
+  assignRoomForCheckin,
   deliverRoom,
   markNoShow,
   markWalked,
@@ -49,7 +49,18 @@ export async function submitAssignRoom(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const stayId = String(formData.get("stayId"));
   const roomId = String(formData.get("roomId"));
-  await runOrError(stayId, () => assignRoom(hotelId, stayId, roomId));
+  await runOrError(stayId, () => assignRoomForCheckin(hotelId, stayId, roomId));
+}
+
+/** Flujo guiado: check-in + asignación (con upgrade opcional) en un solo paso. */
+export async function submitCheckInWithRoom(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const stayId = String(formData.get("stayId"));
+  const roomId = String(formData.get("roomId"));
+  await runOrError(stayId, async () => {
+    await checkIn(hotelId, stayId);
+    await assignRoomForCheckin(hotelId, stayId, roomId);
+  });
 }
 
 export async function submitDeliverRoom(formData: FormData) {

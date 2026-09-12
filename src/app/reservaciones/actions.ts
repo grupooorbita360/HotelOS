@@ -101,7 +101,7 @@ export async function submitConfirmReservation(formData: FormData) {
     });
   }
 
-  redirect("/reservaciones?confirmed=1");
+  redirect(`/reservaciones?reservationId=${reservation.id}&confirmed=1`);
 }
 
 export async function submitCancelReservation(formData: FormData) {
@@ -109,4 +109,20 @@ export async function submitCancelReservation(formData: FormData) {
   const reservationId = String(formData.get("reservationId"));
   await cancelReservation(hotelId, reservationId, "Cancelada desde la interfaz de prueba");
   redirect("/reservaciones?cancelled=1");
+}
+
+export async function submitRegisterAdditionalPayment(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const reservationId = String(formData.get("reservationId"));
+  const amount = Number(formData.get("amount") || 0);
+  const method = String(formData.get("method")) as "card" | "transfer";
+  const type = String(formData.get("type") || "installment") as "deposit" | "installment" | "full_payment" | "refund";
+
+  try {
+    await registerPayment({ hotelId, reservationId, type, amount, method });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido";
+    redirect(`/reservaciones?reservationId=${reservationId}&error=${encodeURIComponent(message)}`);
+  }
+  redirect(`/reservaciones?reservationId=${reservationId}`);
 }
