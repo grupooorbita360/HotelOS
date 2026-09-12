@@ -1,26 +1,55 @@
 @import "tailwindcss";
 
+/*
+ * Paleta tomada del boceto visual del prototipo anterior (Apps Script):
+ * sidebar/acentos verde-azulado, fondo gris muy claro, tarjetas blancas
+ * redondeadas con sombra suave. Se conserva solo el LOOK, no la lógica.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #F4F6F9;
+  --foreground: #111827;
+  --color-brand: #0F766E;
+  --color-brand-dark: #115E59;
+  --color-brand-soft: #ECFDF5;
+  --color-surface: #ffffff;
+  --color-muted: #6B7280;
+  --color-muted-strong: #374151;
+  --color-border: #E5E7EB;
+  --color-border-strong: #D1D5DB;
+  --color-danger: #DC2626;
+  --color-danger-soft: #FEF2F2;
+  --color-warning: #F59E0B;
+  --color-warning-soft: #FFFBEB;
+  --color-success: #10B981;
+  --color-success-soft: #ECFDF5;
+  --color-info: #2563EB;
+  --color-info-soft: #EFF6FF;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-brand: var(--color-brand);
+  --color-brand-dark: var(--color-brand-dark);
+  --color-brand-soft: var(--color-brand-soft);
+  --color-surface: var(--color-surface);
+  --color-muted: var(--color-muted);
+  --color-muted-strong: var(--color-muted-strong);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-danger: var(--color-danger);
+  --color-danger-soft: var(--color-danger-soft);
+  --color-warning: var(--color-warning);
+  --color-warning-soft: var(--color-warning-soft);
+  --color-success: var(--color-success);
+  --color-success-soft: var(--color-success-soft);
+  --color-info: var(--color-info);
+  --color-info-soft: var(--color-info-soft);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
 }

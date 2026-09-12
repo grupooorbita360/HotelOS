@@ -1,4 +1,8 @@
 import { signIn, signUp } from "./actions";
+import { Card } from "@/components/ui/Card";
+import { Field, TextInput } from "@/components/ui/Field";
+import { Button } from "@/components/ui/Button";
+import { Banner } from "@/components/ui/Banner";
 
 export default async function LoginPage({
   searchParams,
@@ -8,57 +12,32 @@ export default async function LoginPage({
   const params = await searchParams;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-6 dark:bg-black">
-      <div className="w-full max-w-sm space-y-4">
-        <h1 className="text-xl font-semibold text-black dark:text-zinc-50">HotelOS</h1>
+    <div className="flex min-h-screen items-center justify-center bg-background px-6">
+      <Card className="w-full max-w-sm">
+        <h1 className="mb-5 text-center text-xl font-bold text-foreground">HotelOS</h1>
 
-        {params.error && (
-          <p className="rounded bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-            {params.error}
-          </p>
-        )}
-        {params.message && (
-          <p className="rounded bg-blue-50 px-3 py-2 text-sm text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-            {params.message}
-          </p>
-        )}
+        <div className="mb-4 space-y-2">
+          {params.error && <Banner tone="danger">{params.error}</Banner>}
+          {params.message && <Banner tone="info">{params.message}</Banner>}
+        </div>
 
-        <form className="space-y-3">
-          <div>
-            <label className="block text-sm text-zinc-600 dark:text-zinc-400">Correo</label>
-            <input
-              name="email"
-              type="email"
-              required
-              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-zinc-600 dark:text-zinc-400">Contraseña</label>
-            <input
-              name="password"
-              type="password"
-              required
-              minLength={6}
-              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-            />
-          </div>
-          <div className="flex gap-2">
-            <button
-              formAction={signIn}
-              className="flex-1 rounded bg-black px-3 py-2 text-sm font-medium text-white dark:bg-zinc-50 dark:text-black"
-            >
-              Entrar
-            </button>
-            <button
-              formAction={signUp}
-              className="flex-1 rounded border border-zinc-300 px-3 py-2 text-sm font-medium dark:border-zinc-700"
-            >
+        <form className="space-y-4">
+          <Field label="Correo electrónico">
+            <TextInput name="email" type="email" required placeholder="tu@hotel.com" />
+          </Field>
+          <Field label="Contraseña">
+            <TextInput name="password" type="password" required minLength={6} placeholder="••••••••" />
+          </Field>
+          <div className="flex gap-2 pt-1">
+            <Button formAction={signIn} className="flex-1">
+              Iniciar sesión
+            </Button>
+            <Button formAction={signUp} variant="secondary" className="flex-1">
               Crear cuenta
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
+      </Card>
     </div>
   );
 }
