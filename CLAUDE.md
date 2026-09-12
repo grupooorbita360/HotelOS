@@ -185,6 +185,15 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0016_inventory_concurrency_functions.sql` | Algoritmo de concurrencia atómica: `attempt_inventory_hold()`, `confirm_reservation_from_hold()`, `release_hold()`, `cancel_reservation()`, `expire_stale_holds()`, `check_availability()` |
 | `0017_guarantees_payments.sql` | `guarantees`, `payments` |
 | `0018_deferred_foreign_keys.sql` | FKs que no se pudieron declarar antes de que existiera `reservations` |
+| `0019_fix_check_availability_volatility.sql` | Fix de volatilidad de `check_availability()` (detectado contra Supabase real, ver sección de Reservaciones) |
+| `0020_reception_settings.sql` | `reception_settings` (config de Recepción por hotel) + alta automática |
+| `0021_rooms_cleanliness.sql` | `rooms.is_clean` (placeholder mínimo hasta que exista Housekeeping) |
+| `0022_stays.sql` | `stays` (Estancia: ciclo físico del huésped) + alta automática al confirmarse una reserva |
+| `0023_room_assignments.sql` | `room_assignments` (historial de habitación física por estancia) |
+| `0024_stay_accounts_transactions.sql` | `stay_accounts`, `stay_transactions` (cuenta contable de Recepción, independiente de Caja) |
+| `0025_guest_requests_incidents_assets.sql` | `guest_requests`, `stay_incidents`, `delivered_assets` |
+| `0026_reception_functions.sql` | Máquina de estados de Estancia y gates: `register_arrival()`, `check_in()`, `assign_room()`, `deliver_room()`, `mark_no_show()`, `mark_walked()`, `register_stay_transaction()`, `void_stay_transaction()`, `attempt_check_out()`, `can_deliver_room()`, `check_out_readiness()` |
+| `0027_seed_front_desk_payments.sql` | Fix: agrega `payments.register` al rol `front_desk` (faltaba desde el seed original) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -287,6 +296,120 @@ UI todavía** — es evolución futura explícita, no un olvido:
   periódicamente (`pg_cron` o un cron externo) para que un Hold vencido
   siempre genere señal visible aunque nadie vuelva a consultar disponibilidad.
 
+### Bug real encontrado al probar contra Supabase (no solo local)
+
+`check_availability()` estaba declarada `stable` pero llama internamente a
+`expire_stale_holds()`, que escribe (libera Holds vencidos). PostgREST abre
+una transacción de solo lectura para funciones `stable`/`immutable`, así
+que la escritura interna fallaba con `cannot execute SELECT FOR UPDATE in a
+read-only transaction` — pero **solo al llamarla vía la API REST real**;
+`psql` local no impone ese modo de solo lectura por volatilidad declarada,
+así que la batería de pruebas local no lo detectó. Se corrigió en
+`0019_fix_check_availability_volatility.sql` quitando `stable`. Lección
+para cualquier función nueva: si internamente llama a algo que escribe
+(aunque sea "de paso", como una limpieza perezosa), **nunca la marques
+`stable`/`immutable`**, sin importar que sus propios `SELECT` parezcan de
+solo lectura — y no confíes solo en pruebas locales con `psql` para esto:
+hay que probar contra la API real de Supabase.
+
+## Recepción: decisiones de esquema (Módulo 03)
+
+### Validación previa obligatoria (antes de tocar este esquema)
+
+Se confirmó que `reservations.status` (Reservaciones) sigue limitado a
+`confirmed | cancelled | no_show | completed` — ningún estado físico
+(`checked_in`/`in_house`/`checked_out`) se había colado ahí. No fue
+necesario corregir nada antes de construir Recepción.
+
+### Frontera con Reservaciones
+
+`reservation_stays` (Reservaciones) sigue siendo **lo vendido**: tipo,
+fechas, tarifa, ocupantes — el acuerdo comercial. `stays` (Recepción, esta
+sección) es **lo que pasa físicamente**: llegada, check-in, entrega de
+habitación, check-out. Son tablas distintas, 1:1, y la integración entre
+módulos ocurre a nivel de base de datos, no de código: un trigger en
+`reservation_stays` (`handle_new_reservation_stay`, en
+`0022_stays.sql`) crea automáticamente la `stays` correspondiente en
+cuanto Reservaciones confirma una reserva. Reservaciones nunca importa
+código de Recepción ni sabe que existe (regla 7 de este documento).
+
+### Decisión clave: Recepción tiene su propia cuenta, independiente de Caja
+
+`stay_accounts` + `stay_transactions` son la cuenta contable de la
+**estancia**, propiedad de Recepción. El futuro módulo Caja se encargará de
+instrumentos de pago (procesar tarjetas, conciliación, arqueo) y alimentará
+esta cuenta insertando transacciones — pero Recepción **nunca** depende de
+Caja para decidir si puede entregar una habitación o cerrar una cuenta: esa
+decisión se toma aquí mismo, contra `stay_accounts.balance`.
+
+`balance` es la suma de `stay_transactions.amount`, mantenida por un
+trigger (`sync_stay_account_balance`) — nunca un campo que la aplicación
+escriba directamente. Convención de signo: `charge`/`refund` positivos,
+`payment` negativo (balance = "lo que el huésped debe"). Las transacciones
+son inmutables: anular una crea una transacción nueva de signo contrario
+con `reversed_transaction_id` apuntando a la original (`void_stay_transaction()`),
+nunca se edita ni se borra una fila existente.
+
+### Separación no negociable: Check-In administrativo ≠ Entrega física
+
+`stays.status` tiene 7 valores: `expected → arrived → checked_in →
+in_house → checked_out`, más `no_show` y `walked`. `checked_in_at` y
+`in_house_at` son campos y eventos **siempre separados** — `check_in()` es
+"ya lo registramos, es huésped de la casa"; `deliver_room()` es "ya tiene
+la llave en la mano". Nunca colapses estos dos eventos en una sola acción:
+es lo que permite medir cuellos de botella entre Recepción y Housekeeping
+(ej. "cuánto tiempo pasa entre que alguien hace check-in y recibe su
+habitación").
+
+### Los tres algoritmos, y por qué están separados
+
+- **`can_deliver_room()`** — gate **financiero** de entrega: sólo mira
+  `reception_settings.entrega_permite_saldo` contra `stay_accounts.balance`.
+  No mira limpieza — eso ya se decidió en el check-in (siguiente punto).
+- **`check_in()`** aplica el gate de **limpieza**
+  (`reception_settings.checkin_permite_sucia`): si es `false`, no se puede
+  hacer check-in mientras la habitación asignada esté sucia
+  (`rooms.is_clean`). Si no hay habitación asignada todavía, este gate no
+  aplica (se asigna después).
+- **`check_out_readiness()`** — evalúa TODO lo que puede bloquear el cierre
+  de cuenta: saldo pendiente (si `bloquear_checkout_saldo`), activos
+  entregados y no devueltos, incidencias abiertas. Devuelve
+  `{ready, blockers[]}`, nunca solo `true`/`false`, para que la interfaz
+  pueda decir exactamente qué falta.
+- **`next_action`** (columna de `stays`) se recalcula con
+  `recompute_stay_next_action()` al final de cada función que cambia algo
+  relevante (estado, asignación, saldo) — igual que el resto del proyecto,
+  nunca se recalcula al leer.
+
+### rooms.is_clean — placeholder mínimo de Housekeeping
+
+Igual que `room_types`/`rooms` fueron el mínimo necesario para que
+Reservaciones tuviera inventario real, `rooms.is_clean` (booleano simple)
+es el mínimo necesario para que el gate de `checkin_permite_sucia`
+funcione. El módulo Housekeeping real (estados detallados, tareas, tiempos
+de limpieza) se construye aparte y puede ampliar esta columna sin romper
+Recepción.
+
+### Fix de permisos: `front_desk` no tenía `payments.register`
+
+El seed original (`0009`) le daba a `front_desk` `checkin.perform` y
+`checkout.perform` pero no `payments.register`, aunque la especificación
+original de Reservaciones ya describía ese rol como responsable de
+"cotizar, crear reservas, **registrar pagos**". Sin este permiso, Recepción
+no podría cobrar/registrar transacciones en la cuenta de la estancia — se
+corrigió en `0027_seed_front_desk_payments.sql`. No se crearon permisos
+nuevos: `checkin.perform`, `checkout.perform`, `room.change`,
+`payments.register` y `rooms.manage` (ya sembrados) cubren todo el módulo.
+
+### Alcance de esta sesión (fuera de alcance a propósito)
+
+Upgrade/downgrade de habitación con autorización (MVP sólo hace asignación
+equivalente: misma `room_type_id` vendida); impacto financiero completo de
+`walked` (`mark_walked()` sólo registra el evento); aplicación automática de
+saldo a favor; integración automática de incidencias hacia un futuro módulo
+de Mantenimiento (`stay_incidents` se registra y se resuelve manualmente,
+sin flujo automático todavía); Late Check-Out/Early Check-In configurables.
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
@@ -312,6 +435,7 @@ src/
   app/                    Rutas (App Router). Páginas y layouts.
     login/                Login/signup mínimo con Supabase Auth (email+password).
     reservaciones/        Página de prueba del módulo: buscar → cotizar → Hold → confirmar → listado.
+    recepcion/            Página de prueba del módulo: llegada → check-in → asignar → entregar → cobrar → check-out.
   proxy.ts                Refresca la sesión de Supabase en cada request (convención Next.js 16; reemplaza a middleware.ts).
   lib/
     supabase/
@@ -328,7 +452,10 @@ src/
     reservaciones/
       actions/             quote.ts, hold.ts, confirm.ts — requirePermission() -> RPC atómica o mutación -> logTimelineEvent().
       queries/             availability.ts, reservations.ts, leads.ts, details.ts — lecturas server-side.
-    rack/ recepcion/ habitaciones/ caja/  (carpetas listas, sin lógica todavía)
+    recepcion/
+      actions/             lifecycle.ts (transiciones de Estancia), account.ts (cuenta/transacciones), service.ts (solicitudes/incidencias/activos).
+      queries/             stays.ts — listado, detalle, habitaciones asignables, config y catálogo de activos.
+    rack/ habitaciones/ caja/  (carpetas listas, sin lógica todavía)
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.
   types/
@@ -393,3 +520,19 @@ No son sugerencias:
 8. No se implementa lógica de negocio de un módulo (Reservaciones, Rack,
    Recepción, Habitaciones, Caja) hasta que se pida explícitamente esa
    tarea — la base de este documento es la única base compartida.
+9. **Nunca** marcar una función de Postgres como `stable`/`immutable` si
+   internamente llama a algo que escribe (aunque sea "de paso", como una
+   limpieza perezosa tipo `expire_stale_holds()`) — PostgREST abre una
+   transacción de solo lectura para esas funciones y la escritura falla en
+   producción aunque funcione perfecto en local (ver el bug real de
+   `check_availability()` en la sección de Reservaciones). Corolario: no te
+   fíes solo de pruebas locales con `psql` para esto — hay que probar contra
+   la API REST real de Supabase al menos una vez antes de dar por bueno un
+   esquema con funciones.
+10. **Nunca** construyas el string de `.select(...)` de Supabase
+    concatenando con `+`: el cliente necesita el string como *literal* en
+    tiempo de compilación para inferir el tipo de la fila (columnas
+    embebidas incluidas); concatenar lo vuelve `string` genérico y toda la
+    consulta se tipa como `GenericStringError`, silenciando el autocompletado
+    y el chequeo de tipos sin un error obvio. Usa un solo string (con
+    template literal sin `${}` si necesitas varias líneas), nunca `"a" + "b"`.

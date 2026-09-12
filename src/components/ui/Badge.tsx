@@ -54,3 +54,31 @@ export function HoldStatusBadge({ status }: { status: string }) {
   const s = HOLD_STATUS[status] ?? { label: status, tone: "neutral" as const };
   return <Badge tone={s.tone}>{s.label}</Badge>;
 }
+
+const STAY_STATUS: Record<string, { label: string; tone: keyof typeof TONES }> = {
+  expected: { label: "Se espera hoy", tone: "neutral" },
+  arrived: { label: "Llegó, falta check-in", tone: "warning" },
+  checked_in: { label: "Check-in hecho", tone: "info" },
+  in_house: { label: "En casa", tone: "success" },
+  checked_out: { label: "Check-out hecho", tone: "neutral" },
+  no_show: { label: "No se presentó", tone: "danger" },
+  walked: { label: "Walked", tone: "danger" },
+};
+
+export function StayStatusBadge({ status }: { status: string }) {
+  const s = STAY_STATUS[status] ?? { label: status, tone: "neutral" as const };
+  return <Badge tone={s.tone}>{s.label}</Badge>;
+}
+
+const NEXT_ACTION_LABEL: Record<string, string> = {
+  registrar_llegada: "Registrar llegada",
+  hacer_checkin: "Hacer check-in",
+  asignar_habitacion: "Asignar habitación",
+  entregar_habitacion: "Entregar habitación",
+  cobrar_saldo: "Cobrar saldo",
+  ninguna: "Sin acción pendiente",
+};
+
+export function nextActionLabel(action: string): string {
+  return NEXT_ACTION_LABEL[action] ?? action;
+}

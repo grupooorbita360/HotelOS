@@ -71,6 +71,10 @@ export default async function ReservacionesPage({
             <h1 className="text-xl font-bold">Reservaciones — {hotel.hotelName}</h1>
             <p className="text-white/80">
               Rol: {hotel.roleName ?? "—"} ·{" "}
+              <Link href="/recepcion" className="underline">
+                Recepción
+              </Link>{" "}
+              ·{" "}
               <Link href="/reservaciones" className="underline">
                 reiniciar
               </Link>

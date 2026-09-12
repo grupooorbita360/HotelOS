@@ -232,6 +232,7 @@ export interface Database {
           room_type_id: string;
           code: string;
           is_active: boolean;
+          is_clean: boolean;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -243,6 +244,7 @@ export interface Database {
           room_type_id: string;
           code: string;
           is_active?: boolean;
+          is_clean?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["rooms"]["Insert"]>;
         Relationships: [];
@@ -565,6 +567,212 @@ export interface Database {
         Update: never;
         Relationships: [];
       };
+      reception_settings: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          entrega_permite_saldo: boolean;
+          checkin_permite_sucia: boolean;
+          noshow_dias_gracia: number;
+          bloquear_checkout_saldo: boolean;
+          extra_settings: Json;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          hotel_id: string;
+          entrega_permite_saldo?: boolean;
+          checkin_permite_sucia?: boolean;
+          noshow_dias_gracia?: number;
+          bloquear_checkout_saldo?: boolean;
+          extra_settings?: Json;
+        };
+        Update: Partial<Database["public"]["Tables"]["reception_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      stays: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          reservation_stay_id: string;
+          status: string;
+          next_action: string;
+          arrived_at: string | null;
+          checked_in_at: string | null;
+          in_house_at: string | null;
+          checked_out_at: string | null;
+          no_show_at: string | null;
+          walked_at: string | null;
+          no_show_reason: string | null;
+          walked_reason: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "stays_reservation_stay_id_fkey";
+            columns: ["reservation_stay_id"];
+            isOneToOne: true;
+            referencedRelation: "reservation_stays";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      room_assignments: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          stay_id: string;
+          room_id: string;
+          assigned_at: string;
+          released_at: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "room_assignments_room_id_fkey";
+            columns: ["room_id"];
+            isOneToOne: false;
+            referencedRelation: "rooms";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      stay_accounts: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          stay_id: string;
+          currency: string;
+          status: string;
+          balance: number;
+          closed_at: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "stay_accounts_stay_id_fkey";
+            columns: ["stay_id"];
+            isOneToOne: true;
+            referencedRelation: "stays";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      stay_transactions: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          stay_account_id: string;
+          type: string;
+          amount: number;
+          concept: string;
+          method: string | null;
+          reversed_transaction_id: string | null;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      guest_requests: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          stay_id: string;
+          description: string;
+          status: string;
+          resolved_at: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          hotel_id: string;
+          stay_id: string;
+          description: string;
+          status?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["guest_requests"]["Insert"]> & {
+          resolved_at?: string | null;
+        };
+        Relationships: [];
+      };
+      stay_incidents: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          stay_id: string;
+          room_id: string | null;
+          type: string;
+          severity: string;
+          description: string;
+          status: string;
+          resolved_at: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          hotel_id: string;
+          stay_id: string;
+          room_id?: string | null;
+          type: string;
+          severity?: string;
+          description: string;
+          status?: string;
+        };
+        Update: Partial<Database["public"]["Tables"]["stay_incidents"]["Insert"]> & {
+          resolved_at?: string | null;
+        };
+        Relationships: [];
+      };
+      delivered_assets: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          stay_id: string;
+          asset_name: string;
+          delivered: boolean;
+          delivered_at: string | null;
+          returned: boolean;
+          returned_at: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          hotel_id: string;
+          stay_id: string;
+          asset_name: string;
+          delivered?: boolean;
+          delivered_at?: string | null;
+          returned?: boolean;
+          returned_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["delivered_assets"]["Insert"]>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -628,6 +836,56 @@ export interface Database {
       expire_stale_holds: {
         Args: Record<PropertyKey, never>;
         Returns: number;
+      };
+      can_deliver_room: {
+        Args: { p_stay_id: string };
+        Returns: { allowed: boolean; reason: string | null }[];
+      };
+      check_out_readiness: {
+        Args: { p_stay_id: string };
+        Returns: { ready: boolean; blockers: string[] };
+      };
+      register_arrival: {
+        Args: { p_stay_id: string };
+        Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      check_in: {
+        Args: { p_stay_id: string };
+        Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      assign_room: {
+        Args: { p_stay_id: string; p_room_id: string };
+        Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
+      };
+      deliver_room: {
+        Args: { p_stay_id: string };
+        Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      mark_no_show: {
+        Args: { p_stay_id: string; p_reason?: string | null };
+        Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      mark_walked: {
+        Args: { p_stay_id: string; p_reason?: string | null };
+        Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      register_stay_transaction: {
+        Args: {
+          p_stay_id: string;
+          p_type: string;
+          p_amount: number;
+          p_concept: string;
+          p_method?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["stay_transactions"]["Row"];
+      };
+      void_stay_transaction: {
+        Args: { p_transaction_id: string; p_reason?: string | null };
+        Returns: Database["public"]["Tables"]["stay_transactions"]["Row"];
+      };
+      attempt_check_out: {
+        Args: { p_stay_id: string };
+        Returns: Database["public"]["Tables"]["stays"]["Row"];
       };
     };
     Enums: Record<string, never>;
