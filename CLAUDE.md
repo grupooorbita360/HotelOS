@@ -194,6 +194,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0025_guest_requests_incidents_assets.sql` | `guest_requests`, `stay_incidents`, `delivered_assets` |
 | `0026_reception_functions.sql` | Máquina de estados de Estancia y gates: `register_arrival()`, `check_in()`, `assign_room()`, `deliver_room()`, `mark_no_show()`, `mark_walked()`, `register_stay_transaction()`, `void_stay_transaction()`, `attempt_check_out()`, `can_deliver_room()`, `check_out_readiness()` |
 | `0027_seed_front_desk_payments.sql` | Fix: agrega `payments.register` al rol `front_desk` (faltaba desde el seed original) |
+| `0028_fix_stay_transactions_created_by.sql` | Fix: `register_stay_transaction()`/`void_stay_transaction()` no fijaban `created_by` (ver sección de Recepción) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -401,6 +402,24 @@ corrigió en `0027_seed_front_desk_payments.sql`. No se crearon permisos
 nuevos: `checkin.perform`, `checkout.perform`, `room.change`,
 `payments.register` y `rooms.manage` (ya sembrados) cubren todo el módulo.
 
+### Bug real encontrado al probar el flujo completo contra Supabase
+
+`register_stay_transaction()` y `void_stay_transaction()` insertaban en
+`stay_transactions` sin fijar `created_by`, quedando siempre `NULL` —
+auditoría rota, detectado al correr el flujo end-to-end contra el proyecto
+real (no en las pruebas locales con `psql`, que no distinguen usuario real
+de un valor omitido). Causa: `stay_transactions` es append-only y no tiene
+`updated_at`/`updated_by`, así que **no puede** usar el trigger genérico
+`set_audit_fields()` (fallaría al no existir esas columnas) — pero al
+excluirlo, se me olvidó que entonces la propia función `SECURITY DEFINER`
+tenía que fijar `created_by = auth.uid()` a mano en el `INSERT`, ya que esta
+tabla tampoco acepta INSERT directo del cliente (no hay RLS que lo
+garantice como en `timeline_events`). Corregido en
+`0028_fix_stay_transactions_created_by.sql`. Lección: cualquier tabla
+append-only sin `updated_at`/`updated_by` que se escriba solo desde una
+función `SECURITY DEFINER` necesita que **esa función** fije `created_by`
+explícitamente — no hay trigger genérico ni RLS que lo haga por ti.
+
 ### Alcance de esta sesión (fuera de alcance a propósito)
 
 Upgrade/downgrade de habitación con autorización (MVP sólo hace asignación
@@ -536,3 +555,15 @@ No son sugerencias:
     consulta se tipa como `GenericStringError`, silenciando el autocompletado
     y el chequeo de tipos sin un error obvio. Usa un solo string (con
     template literal sin `${}` si necesitas varias líneas), nunca `"a" + "b"`.
+11. Si una tabla es append-only y por eso **no** tiene
+    `updated_at`/`updated_by` (ej. `timeline_events`, `stay_transactions`),
+    **no le pongas el trigger genérico** `set_audit_fields()` (fallaría, esas
+    columnas no existen). Pero entonces `created_by` no se llena solo:
+    o la tabla acepta INSERT directo del cliente y una política RLS
+    `WITH CHECK (created_by = auth.uid())` lo garantiza (patrón de
+    `timeline_events`), o solo se escribe vía una función `SECURITY DEFINER`
+    y **esa función** debe fijar `created_by = auth.uid()` explícitamente en
+    el `INSERT` (patrón de `stay_transactions` tras el fix de `0028`).
+    Verifícalo probando contra Supabase real, no solo local — un
+    `created_by` en `NULL` no revienta nada, así que pasa desapercibido si
+    no se revisa a propósito.
