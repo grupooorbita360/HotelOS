@@ -454,10 +454,21 @@ export interface Database {
           hold_id: string | null;
           reservation_stay_id: string | null;
           created_at: string;
+          room_id: string | null;
+          reason: string | null;
+          created_by: string | null;
         };
         Insert: never;
         Update: never;
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "inventory_blocks_room_id_fkey";
+            columns: ["room_id"];
+            isOneToOne: false;
+            referencedRelation: "rooms";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       reservations: {
         Row: {

@@ -198,6 +198,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0029_room_catalog_fields.sql` | `room_types.base_rate`; `rooms.building`, `rooms.bed_type` (Módulo 04, ver sección de Configuración) |
 | `0030_profiles_email_sync.sql` | `profiles.email`, sincronizado por trigger desde `auth.users` (alta y cambio de correo) |
 | `0031_staff_lookup_function.sql` | `find_user_id_by_email()` — SECURITY DEFINER, gate `staff.manage`, usado por el alta de usuarios de Configuración |
+| `0032_room_upgrade_assignment.sql` | `assign_room_for_checkin()` — asignación con upgrade (cobra la diferencia de tarifa) para el flujo guiado de check-in |
+| `0033_inventory_blocks_physical_extension.sql` | Extensión aditiva de `inventory_blocks`: `room_id`, `reason`, `created_by` + catálogo de `block_type` ampliado (preparación para Rack, ver sección de Reservaciones) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -299,6 +301,65 @@ UI todavía** — es evolución futura explícita, no un olvido:
   `attempt_inventory_hold()`, pero en producción también debe llamarse
   periódicamente (`pg_cron` o un cron externo) para que un Hold vencido
   siempre genere señal visible aunque nadie vuelva a consultar disponibilidad.
+
+### Extensión de `inventory_blocks` para el futuro Rack (0033)
+
+Pedido explícito: preparar `inventory_blocks` (en producción con datos
+reales) para que el futuro módulo Rack pueda representar bloqueos
+**físicos** (mantenimiento de una habitación concreta, uso interno, etc.)
+en la misma tabla, en vez de crear una tabla paralela — exactamente el
+principio con el que se diseñó esta tabla desde 0015 ("no puede haber dos
+algoritmos de disponibilidad distintos"). Puramente aditivo: ninguna
+columna, tipo, ni valor de `block_type` existente se quitó o cambió.
+
+Se agregó:
+- `room_id` (nullable, FK a `rooms`) — `NULL` = bloqueo comercial por tipo
+  (como siempre, todas las filas existentes); no-`NULL` = bloqueo de una
+  unidad física específica. No participa en el conteo de
+  `check_availability()`/`attempt_inventory_hold()` (siguen contando por
+  `hotel_id + room_type_id + stay_date`, sin mirar `room_id`) — un bloqueo
+  físico sigue restando del total del tipo, que es el comportamiento
+  correcto (se probó explícitamente, ver abajo).
+- `block_type` ganó 4 valores nuevos: `internal_use`, `courtesy`, `group`,
+  `contingency`. Los 4 originales (`hold`, `reservation`, `maintenance`,
+  `overbooking`) siguen intactos.
+- `reason` (texto, nullable) y `created_by` (uuid, nullable, FK a
+  `auth.users`) — sólo para bloqueos manuales futuros; `NULL` para
+  `hold`/`reservation`, que ya se auditan vía `hold_id`/`reservation_stay_id`.
+
+**Decisión de nombres:** el pedido original pidió `motivo`/`usuario_id` y
+"MANTENIMIENTO" como valor nuevo de `block_type`. Se ajustó a
+`reason`/`created_by` (inglés, como el resto de las ~30 tablas del
+esquema — ninguna otra usa un nombre de columna en español) y **no** se
+agregó `mantenimiento`: `maintenance` ya existía desde 0015 y significa
+exactamente lo mismo — agregar un segundo valor para el mismo concepto
+habría violado la regla 6 (nunca dupliques algo que ya existe) y dejado
+ambiguo cuál usar de ahí en adelante. Los 4 valores realmente nuevos sí se
+agregaron, en inglés para ser consistentes con `hold`/`reservation` ya
+existentes.
+
+**Sin cambios de RLS ni de funciones**: esta tabla nunca aceptó
+INSERT/UPDATE directo del cliente (0015) y sigue sin aceptarlo — los 4
+`block_type` nuevos no son alcanzables desde ningún lado todavía. Eso es
+intencional: no se construyó el módulo Rack en esta sesión (regla 8), sólo
+el esquema que va a necesitar. Cuando se construya Rack, va a necesitar su
+propia función `SECURITY DEFINER` (validando `has_permission()`) para
+crear estos bloqueos manuales, igual que `attempt_inventory_hold()` (0016)
+es hoy el único camino para `hold`/`reservation`.
+
+**Cómo se validó** (contra el esquema completo 0001-0032 local, antes de
+mandar la migración): se repitió la batería de pruebas de concurrencia y
+disponibilidad de Reservaciones sin ningún cambio de comportamiento
+(`check_availability()`, `attempt_inventory_hold()`,
+`confirm_reservation_from_hold()`, `cancel_reservation()` — mismos
+resultados que antes de la migración), y además: un bloqueo físico de
+`maintenance` con `room_id` sí resta de la disponibilidad comercial del
+tipo; los 4 `block_type` nuevos se aceptan; un valor inválido se sigue
+rechazando; un cliente autenticado normal sigue sin poder insertar
+directo. Los dos `check` de 0015 eran anónimos (declarados inline) — no se
+puede ensanchar un `check` in place, así que la migración los localiza por
+catálogo (`pg_constraint`) y los reemplaza, en vez de asumir un nombre
+autogenerado que podría no coincidir entre el entorno local y Supabase.
 
 ### Actualización de UI (feedback de uso real, misma sesión)
 
@@ -487,12 +548,46 @@ explícitamente — no hay trigger genérico ni RLS que lo haga por ti.
 
 ### Alcance de esta sesión (fuera de alcance a propósito)
 
-Upgrade/downgrade de habitación con autorización (MVP sólo hace asignación
-equivalente: misma `room_type_id` vendida); impacto financiero completo de
-`walked` (`mark_walked()` sólo registra el evento); aplicación automática de
-saldo a favor; integración automática de incidencias hacia un futuro módulo
-de Mantenimiento (`stay_incidents` se registra y se resuelve manualmente,
-sin flujo automático todavía); Late Check-Out/Early Check-In configurables.
+~~Upgrade/downgrade de habitación con autorización~~ — se construyó en esta
+misma sesión, ver "Check-in guiado con upgrade" abajo. Sigue fuera de
+alcance: impacto financiero completo de `walked` (`mark_walked()` sólo
+registra el evento); aplicación automática de saldo a favor; integración
+automática de incidencias hacia un futuro módulo de Mantenimiento
+(`stay_incidents` se registra y se resuelve manualmente, sin flujo
+automático todavía); Late Check-Out/Early Check-In configurables.
+
+### Check-in guiado con upgrade (feedback de uso real, misma sesión)
+
+"Hacer check-in" dejó de ser un botón suelto: ahora es un flujo de 2 pasos
+en `/recepcion` (estado en la URL vía `?checkinStep=`, mismo patrón que los
+pasos de Reservaciones) — **1. Cuenta** (hospedaje/extras/pagado/saldo +
+registrar un pago ahí mismo) y **2. Habitación** (elegir una habitación
+"Equivalente" o "Upgrade disponible", con la diferencia de tarifa ya
+calculada). El botón final ("Asignar habitación y hacer Check-In") llama
+`check_in()` (0026, sin cambios) y luego la función nueva
+`assign_room_for_checkin()` (0032) en la misma Server Action.
+
+`assign_room_for_checkin()` es una función **nueva**, no una edición de
+`assign_room()` (0026, que no se toca — sigue siendo la vía estrictamente
+equivalente si algún caller la sigue usando). Hace lo mismo que
+`assign_room()` pero sin el `ROOM_TYPE_MISMATCH` que bloqueaba elegir un
+tipo distinto al vendido: si el `room_type` de la habitación elegida tiene
+`base_rate` mayor al vendido, cobra la diferencia × noches como un cargo
+real (`register_stay_transaction()`) en la misma transacción — si ese cargo
+falla (ej. permisos), toda la reasignación se revierte, no queda un estado a
+medias. Downgrade (tarifa menor) no genera abono automático a favor —
+mismo criterio que "aplicación automática de saldo a favor" ya fuera de
+alcance. Los dos casos (equivalente y upgrade) y el bloqueo de permisos se
+probaron localmente antes de mandar la migración.
+
+`listRoomAssignmentOptions()` (nueva query) reemplazó a `listAssignableRooms()`
+como la única fuente de opciones de habitación en la UI — agrupa
+"equivalente" (mismo tipo, sin costo) y "upgrade" (otro tipo, tarifa mayor,
+diferencia ya calculada), y **excluye downgrades de la lista de
+recomendaciones** (un tipo más barato no se ofrece como upsell). El bloque
+"Asignar habitación (equivalente)" que ya existía para el caso raro de
+`checked_in` sin habitación asignada se actualizó para usar la misma
+función/query en vez de mantener una segunda implementación (regla 6).
 
 ## Configuración: decisiones de esquema (Módulo 04)
 
