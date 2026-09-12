@@ -200,6 +200,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0031_staff_lookup_function.sql` | `find_user_id_by_email()` — SECURITY DEFINER, gate `staff.manage`, usado por el alta de usuarios de Configuración |
 | `0032_room_upgrade_assignment.sql` | `assign_room_for_checkin()` — asignación con upgrade (cobra la diferencia de tarifa) para el flujo guiado de check-in |
 | `0033_inventory_blocks_physical_extension.sql` | Extensión aditiva de `inventory_blocks`: `room_id`, `reason`, `created_by` + catálogo de `block_type` ampliado (preparación para Rack, ver sección de Reservaciones) |
+| `0034_hotel_policies_iva.sql` | `hotel_policies.iva_porcentaje` — IVA configurable por hotel, solo para desglose contable (ver sección de Configuración) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -712,6 +713,41 @@ color de acento (`updateBrandColor()`, guardado en
 properties con `brandStyleVars()` en `src/lib/color.ts`). Sigue fuera de
 alcance todo lo demás de branding completo: logo, tipografía, favicon,
 white-label.
+
+### IVA configurable por hotel (0034)
+
+Pedido explícito, con una restricción muy clara: **los montos que
+Reservaciones/Recepción ya capturan y muestran (tarifas, cargos, pagos) no
+cambian** — siguen siendo el total final tal como el huésped los ve hoy,
+IVA ya incluido. Esto NO es una función de cálculo de precios, es sólo
+preparación para reportes/contabilidad futuros.
+
+- `hotel_policies.iva_porcentaje` (numeric, default `16.00`, `check` entre
+  0 y 100) — configurable porque varía por región (16% general, 8% en zona
+  fronteriza en México). Columna aditiva sobre una tabla en producción con
+  datos reales: default + `check` no afectan ninguna fila existente, y el
+  trigger `handle_new_hotel()` de 0007 (sin tocar) sigue dando de alta la
+  fila de políticas de cada hotel nuevo, ahora con `iva_porcentaje = 16.00`
+  automáticamente.
+- `calculateTaxBreakdown(total, ivaPorcentaje)` en `src/lib/tax.ts` — pura,
+  sin acceso a base de datos, `subtotal = total / (1 + iva/100)`,
+  `montoIva = total - subtotal`. Toma un monto YA final (con impuesto
+  incluido) y lo desglosa; nunca al revés, nunca se usa para calcular ni
+  mostrar un precio al huésped. Ningún módulo la llama todavía (no hay
+  pantalla de reportes ni facturación electrónica) — queda disponible para
+  cuando se pida ese trabajo, tal como se pidió explícitamente.
+- Se agregó a la pantalla de Configuración → Políticas del hotel (mismo
+  formulario/tabla de "Reservaciones y garantía") con una nota explícita en
+  la UI de que no afecta las tarifas mostradas, para no generar la
+  expectativa de que cambia algo que hoy ya funciona.
+
+**Validado**: además de las pruebas propias del campo (hoteles existentes
+reciben `16.00` por default, un hotel nuevo también, `hotel_admin` puede
+cambiarlo a 8.00, un valor fuera de 0–100 se rechaza), se repitió la
+batería completa de Reservaciones (`check_availability()`,
+`attempt_inventory_hold()`, `confirm_reservation_from_hold()`,
+`cancel_reservation()`, ciclo Hold→Reserva→Cancelar) sobre el esquema con
+0033+0034 aplicadas: mismos resultados que siempre, nada se rompió.
 
 ## Convenciones de nombres
 

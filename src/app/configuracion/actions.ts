@@ -107,6 +107,7 @@ export async function submitUpdateHotelPolicies(formData: FormData) {
       allowsEarlyCheckin: formData.get("allowsEarlyCheckin") === "on",
       standardCheckinTime: String(formData.get("standardCheckinTime")),
       standardCheckoutTime: String(formData.get("standardCheckoutTime")),
+      ivaPorcentaje: Number(formData.get("ivaPorcentaje") || 0),
     }),
   );
 }

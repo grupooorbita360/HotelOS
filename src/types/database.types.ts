@@ -168,6 +168,7 @@ export interface Database {
           standard_checkout_time: string;
           checkin_assets: Json;
           extra_settings: Json;
+          iva_porcentaje: number;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -182,6 +183,7 @@ export interface Database {
           standard_checkout_time?: string;
           checkin_assets?: Json;
           extra_settings?: Json;
+          iva_porcentaje?: number;
         };
         Update: Partial<Database["public"]["Tables"]["hotel_policies"]["Insert"]>;
         Relationships: [];

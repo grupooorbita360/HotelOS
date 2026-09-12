@@ -12,10 +12,15 @@ export interface HotelPoliciesInput {
   allowsEarlyCheckin: boolean;
   standardCheckinTime: string;
   standardCheckoutTime: string;
+  ivaPorcentaje: number;
 }
 
 export async function updateHotelPolicies(hotelId: string, input: HotelPoliciesInput) {
   await requirePermission(hotelId, "hotel.settings.manage");
+  if (input.ivaPorcentaje < 0 || input.ivaPorcentaje > 100) {
+    throw new Error("El IVA debe estar entre 0 y 100.");
+  }
+
   const supabase = await createClient();
 
   const { error } = await supabase
@@ -26,6 +31,7 @@ export async function updateHotelPolicies(hotelId: string, input: HotelPoliciesI
       allows_early_checkin: input.allowsEarlyCheckin,
       standard_checkin_time: input.standardCheckinTime,
       standard_checkout_time: input.standardCheckoutTime,
+      iva_porcentaje: input.ivaPorcentaje,
     })
     .eq("hotel_id", hotelId);
   if (error) throw error;

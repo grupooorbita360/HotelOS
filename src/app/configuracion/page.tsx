@@ -343,7 +343,21 @@ export default async function ConfiguracionPage({
                   <Field label="Hora estándar de check-out">
                     <TextInput name="standardCheckoutTime" type="time" defaultValue={hotelPolicies.standard_checkout_time} />
                   </Field>
+                  <Field label="IVA (%)">
+                    <TextInput
+                      name="ivaPorcentaje"
+                      type="number"
+                      min={0}
+                      max={100}
+                      step="0.01"
+                      defaultValue={hotelPolicies.iva_porcentaje}
+                    />
+                  </Field>
                 </div>
+                <p className="text-xs text-muted">
+                  Varía por región (16% general, 8% en zona fronteriza). Solo para desglose contable/reportes — no
+                  cambia las tarifas ni montos que ya ves en Reservaciones y Recepción.
+                </p>
                 <Button>Guardar políticas</Button>
               </form>
             </Card>
