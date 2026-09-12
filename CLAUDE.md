@@ -329,6 +329,39 @@ inicialice estado editable desde `searchParams`/props del servidor: si se
 llega a él por navegación client-side (no full reload), necesita un `key`
 atado a esos valores, o el estado queda "pegado" al primer valor con el
 que se montó.
+
+### Actualización de UI, ronda 2 (feedback de uso real, misma sesión)
+
+- **Buscar disponibilidad en fechas pasadas ya no devuelve opciones.** Se
+  valida `checkIn >= hoy` y `checkOut > checkIn` antes de llamar
+  `searchAvailableOptions()`; si falla, se muestra un `Banner` y no se
+  ejecuta la búsqueda. Los inputs de fecha también llevan `min={hoy}` como
+  ayuda visual, pero la validación real es esta (server-side), no el
+  atributo HTML.
+- **El menú lateral es ahora fijo (`AppShell`, reemplaza `ModuleHeader`).**
+  El header superior con gradiente + links a la derecha "se perdía" al
+  hacer scroll porque vivía dentro del contenedor que hacía scroll.
+  `AppShell` separa un `<aside>` con `position: fixed` (nunca se mueve) de
+  un `<main>` que es la única región que hace scroll — mismo patrón que el
+  sidebar del prototipo anterior (sólo se llevó el layout, no su lógica).
+  Sólo lista los 3 módulos que existen de verdad (Reservaciones, Recepción,
+  Configuración); no se inventaron links a módulos todavía no construidos.
+- **Confirmar una reserva ahora sí registra un Pago real.** El comentario
+  original de `actions/confirm.ts` decía "garantía/pago real se añaden con
+  actions/guarantee.ts y actions/payment.ts sobre la reserva ya
+  confirmada" -- ese archivo nunca se había creado. Se agregó
+  `modules/reservaciones/actions/payment.ts` (`registerPayment()`), y el
+  formulario de "Confirmar reserva" ahora incluye Canal, Total hospedaje
+  (solo lectura), Anticipo, Moneda y Método de pago (`card`/`transfer`,
+  los únicos que acepta el `check` de `payments.method` desde 0017) +
+  Observaciones. Si hay anticipo, `submitConfirmReservation` llama
+  `registerPayment()` justo después de confirmar la reserva, como
+  `type: 'deposit'`. `payments` acepta INSERT directo del cliente (RLS de
+  0017 ya lo permite vía `payments.register`), así que no hizo falta una
+  función `SECURITY DEFINER` nueva. Sigue sin construirse el flujo de
+  Garantía (`guarantees`, `card_hold`/`cash_deposit`) -- no se pidió
+  todavía y es un ciclo de vida distinto (retener/liberar/cobrar).
+
 ### Bug real encontrado al probar contra Supabase (no solo local)
 
 `check_availability()` estaba declarada `stable` pero llama internamente a
@@ -626,7 +659,7 @@ src/
       timeline.ts           logTimelineEvent(): único punto de escritura a timeline_events.
   modules/
     reservaciones/
-      actions/             quote.ts, hold.ts, confirm.ts — requirePermission() -> RPC atómica o mutación -> logTimelineEvent().
+      actions/             quote.ts, hold.ts, confirm.ts, payment.ts — requirePermission() -> RPC atómica o mutación -> logTimelineEvent().
       queries/             availability.ts, reservations.ts, leads.ts, details.ts — lecturas server-side.
     recepcion/
       actions/             lifecycle.ts (transiciones de Estancia), account.ts (cuenta/transacciones), service.ts (solicitudes/incidencias/activos).

@@ -2,19 +2,18 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { signOut } from "@/app/login/actions";
-import { brandStyleVars } from "@/lib/color";
 import { formatDate, formatDateRange, formatDateTime } from "@/lib/format";
 import { listRoomTypes, searchAvailableOptions } from "@/modules/reservaciones/queries/availability";
 import { listReservations, listActiveHolds } from "@/modules/reservaciones/queries/reservations";
 import { listLeads } from "@/modules/reservaciones/queries/leads";
 import { getQuoteOptionDetails, getHoldDetails, getReservationDetails } from "@/modules/reservaciones/queries/details";
 import { Card, CardTitle } from "@/components/ui/Card";
-import { Field, TextInput } from "@/components/ui/Field";
+import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { ReservationStatusBadge, LeadStatusBadge, HoldStatusBadge } from "@/components/ui/Badge";
-import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import { AppShell } from "@/components/ui/AppShell";
 import { GuestSearchField } from "@/components/ui/GuestSearchField";
 import { CopyQuoteButton } from "@/components/ui/CopyQuoteButton";
 import {
@@ -80,8 +79,18 @@ export default async function ReservacionesPage({
   const reservationDetail = params.reservationId ? await getReservationDetails(hotel.hotelId, params.reservationId) : null;
   const leadDetail = params.leadId ? leads.find((l) => l.id === params.leadId) : null;
 
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const searchDateError =
+    params.checkIn && params.checkOut
+      ? params.checkIn < todayIso
+        ? "La fecha de check-in ya pasó. Elige una fecha desde hoy."
+        : params.checkOut <= params.checkIn
+          ? "La fecha de check-out debe ser posterior al check-in."
+          : null
+      : null;
+
   const availableOptions =
-    !quoteOption && !hold && params.checkIn && params.checkOut
+    !quoteOption && !hold && params.checkIn && params.checkOut && !searchDateError
       ? await searchAvailableOptions(hotel.hotelId, params.checkIn, params.checkOut)
       : null;
 
@@ -95,15 +104,14 @@ export default async function ReservacionesPage({
   }));
 
   return (
-    <div className="min-h-screen bg-background px-6 py-8" style={brandStyleVars(hotel.brandColor)}>
-      <div className="mx-auto max-w-5xl space-y-6 text-sm">
-        <ModuleHeader
-          title="Reservaciones"
-          hotelName={hotel.hotelName}
-          roleName={hotel.roleName}
-          current="reservaciones"
-          resetHref="/reservaciones"
-        />
+    <AppShell
+      hotelName={hotel.hotelName}
+      roleName={hotel.roleName}
+      current="reservaciones"
+      resetHref="/reservaciones"
+      brandColor={hotel.brandColor}
+    >
+      <h1 className="text-xl font-bold text-foreground">Reservaciones</h1>
 
         <div className="grid grid-cols-3 gap-4">
           <KpiCard label="Reservas" value={reservations.length} />
@@ -234,8 +242,41 @@ export default async function ReservacionesPage({
                     defaultValue={hold.quote_options?.quotes?.leads?.guest_phone ?? ""}
                   />
                 </Field>
+                <Field label="Canal">
+                  <Select name="channel" defaultValue="direct">
+                    <option value="direct">Directo</option>
+                    <option value="phone">Teléfono</option>
+                    <option value="walkin">Walk-in</option>
+                    <option value="booking">Booking.com</option>
+                    <option value="airbnb">Airbnb</option>
+                    <option value="expedia">Expedia</option>
+                    <option value="other">Otro</option>
+                  </Select>
+                </Field>
+                <Field label="Total hospedaje">
+                  <TextInput readOnly defaultValue={`$${hold.quote_options?.total ?? 0}`} />
+                </Field>
+                <Field label="Anticipo (opcional)">
+                  <TextInput name="depositAmount" type="number" min={0} step="0.01" defaultValue={0} />
+                </Field>
+                <Field label="Moneda del anticipo">
+                  <Select name="depositCurrency" defaultValue="MXN">
+                    <option value="MXN">MXN</option>
+                    <option value="USD">USD</option>
+                  </Select>
+                </Field>
+                <Field label="Método de pago">
+                  <Select name="depositMethod" defaultValue="">
+                    <option value="">Sin anticipo por ahora</option>
+                    <option value="card">Tarjeta</option>
+                    <option value="transfer">Transferencia</option>
+                  </Select>
+                </Field>
+                <Field label="Observaciones" className="col-span-2">
+                  <TextInput name="depositNotes" placeholder="Notas internas de la reserva" />
+                </Field>
                 <div className="col-span-2">
-                  <Button>Confirmar garantía/pago y crear reserva</Button>
+                  <Button>Confirmar reserva</Button>
                 </div>
               </form>
             )}
@@ -297,10 +338,10 @@ export default async function ReservacionesPage({
                     defaultPhone={params.guestPhone}
                   />
                   <Field label="Check-in">
-                    <TextInput name="checkIn" type="date" required defaultValue={params.checkIn} />
+                    <TextInput name="checkIn" type="date" required min={todayIso} defaultValue={params.checkIn} />
                   </Field>
                   <Field label="Check-out">
-                    <TextInput name="checkOut" type="date" required defaultValue={params.checkOut} />
+                    <TextInput name="checkOut" type="date" required min={todayIso} defaultValue={params.checkOut} />
                   </Field>
                   <Field label="Adultos">
                     <TextInput name="adults" type="number" min={1} defaultValue={params.adults ?? "1"} />
@@ -315,6 +356,8 @@ export default async function ReservacionesPage({
                     <Button type="submit">Buscar opciones</Button>
                   </div>
                 </form>
+
+                {searchDateError && <Banner tone="danger">{searchDateError}</Banner>}
 
                 {availableOptions && (
                   <div className="space-y-3 border-t border-border pt-4">
@@ -470,7 +513,6 @@ export default async function ReservacionesPage({
             </tbody>
           </table>
         </Card>
-      </div>
-    </div>
+    </AppShell>
   );
 }

@@ -2,7 +2,6 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { signOut } from "@/app/login/actions";
-import { brandStyleVars } from "@/lib/color";
 import { formatDateRange } from "@/lib/format";
 import { listStays, getStayDetails, listAssignableRooms, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -11,7 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { StayStatusBadge, nextActionLabel } from "@/components/ui/Badge";
-import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import { AppShell } from "@/components/ui/AppShell";
 import {
   submitRegisterArrival,
   submitCheckIn,
@@ -68,15 +67,15 @@ export default async function RecepcionPage({
   const checkinAssets = detail ? await getHotelCheckinAssets(hotel.hotelId) : [];
 
   return (
-    <div className="min-h-screen bg-background px-6 py-8" style={brandStyleVars(hotel.brandColor)}>
-      <div className="mx-auto max-w-6xl space-y-6 text-sm">
-        <ModuleHeader
-          title="Recepción"
-          hotelName={hotel.hotelName}
-          roleName={hotel.roleName}
-          current="recepcion"
-          resetHref="/recepcion"
-        />
+    <AppShell
+      hotelName={hotel.hotelName}
+      roleName={hotel.roleName}
+      current="recepcion"
+      resetHref="/recepcion"
+      brandColor={hotel.brandColor}
+      maxWidthClassName="max-w-6xl"
+    >
+      <h1 className="text-xl font-bold text-foreground">Recepción</h1>
 
         <div className="grid grid-cols-3 gap-4">
           <KpiCard label="Llegadas esperadas" value={counts.expected} />
@@ -415,7 +414,6 @@ export default async function RecepcionPage({
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </AppShell>
   );
 }

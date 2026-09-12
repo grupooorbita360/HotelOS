@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { createQuote } from "@/modules/reservaciones/actions/quote";
 import { createHoldFromQuoteOption, releaseHold } from "@/modules/reservaciones/actions/hold";
 import { confirmReservation, cancelReservation } from "@/modules/reservaciones/actions/confirm";
+import { registerPayment } from "@/modules/reservaciones/actions/payment";
 
 const IVA = 0.16;
 
@@ -74,15 +75,31 @@ export async function submitConfirmReservation(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const holdId = String(formData.get("holdId"));
   const rateTotal = Number(formData.get("rateTotal") || 0);
+  const channel = String(formData.get("channel") || "direct");
 
-  await confirmReservation({
+  const reservation = await confirmReservation({
     hotelId,
     holdId,
     primaryGuestName: String(formData.get("primaryGuestName")),
     primaryGuestEmail: String(formData.get("primaryGuestEmail") || "") || undefined,
     primaryGuestPhone: String(formData.get("primaryGuestPhone") || "") || undefined,
+    channel,
     rateTotal,
   });
+
+  const depositAmount = Number(formData.get("depositAmount") || 0);
+  const depositMethod = String(formData.get("depositMethod") || "") as "card" | "transfer" | "";
+  if (depositAmount > 0 && depositMethod) {
+    await registerPayment({
+      hotelId,
+      reservationId: reservation.id,
+      type: "deposit",
+      amount: depositAmount,
+      currency: String(formData.get("depositCurrency") || "MXN"),
+      method: depositMethod,
+      notes: String(formData.get("depositNotes") || "") || undefined,
+    });
+  }
 
   redirect("/reservaciones?confirmed=1");
 }

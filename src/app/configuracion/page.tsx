@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { hasPermission } from "@/lib/auth/permissions";
 import { signOut } from "@/app/login/actions";
-import { brandStyleVars } from "@/lib/color";
 import { listRoomTypes, listRooms } from "@/modules/configuracion/queries/rooms";
 import { getHotelPolicies, getReceptionSettings } from "@/modules/configuracion/queries/policies";
 import { listHotelStaff, listSystemRoles } from "@/modules/configuracion/queries/staff";
@@ -12,7 +11,7 @@ import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { Badge } from "@/components/ui/Badge";
-import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import { AppShell } from "@/components/ui/AppShell";
 import {
   submitCreateRoomType,
   submitUpdateRoomType,
@@ -116,17 +115,16 @@ export default async function ConfiguracionPage({
   };
 
   return (
-    <div className="min-h-screen bg-background px-6 py-8" style={brandStyleVars(hotel.brandColor)}>
-      <div className="mx-auto max-w-5xl space-y-6 text-sm">
-        <ModuleHeader
-          title="Configuración"
-          hotelName={hotel.hotelName}
-          roleName={hotel.roleName}
-          current="configuracion"
-          resetHref="/configuracion"
-        />
+    <AppShell
+      hotelName={hotel.hotelName}
+      roleName={hotel.roleName}
+      current="configuracion"
+      resetHref="/configuracion"
+      brandColor={hotel.brandColor}
+    >
+      <h1 className="text-xl font-bold text-foreground">Configuración</h1>
 
-        <div className="flex gap-2 border-b border-border pb-2">
+      <div className="flex gap-2 border-b border-border pb-2">
           {availableTabs.map((t) => (
             <Link
               key={t}
@@ -460,7 +458,6 @@ export default async function ConfiguracionPage({
             </form>
           </Card>
         )}
-      </div>
-    </div>
+    </AppShell>
   );
 }
