@@ -300,6 +300,35 @@ UI todavía** — es evolución futura explícita, no un olvido:
   periódicamente (`pg_cron` o un cron externo) para que un Hold vencido
   siempre genere señal visible aunque nadie vuelva a consultar disponibilidad.
 
+### Actualización de UI (feedback de uso real, misma sesión)
+
+El "Paso 1" dejó de ser "escribe a mano un tipo + una tarifa": ahora es
+`GuestSearchField` (busca por nombre/correo/teléfono contra los leads ya
+cargados del hotel, sin ida y vuelta al servidor) + fechas/pax, y al
+"Buscar opciones" (navegación GET normal, sin Server Action — no hay nada
+que escribir todavía) se listan TODOS los tipos con disponibilidad real
+(`searchAvailableOptions()`) y su `base_rate` como tarifa editable, con un
+botón "Copiar cotización" (portapapeles, sin envío automático) además de
+"Reservar". Reservas y Leads del listado ahora son clicables a un detalle
+(`?reservationId=`/`?leadId=`), y todas las fechas se muestran con
+`formatDate()`/`formatDateRange()` (`src/lib/format.ts`) en vez del ISO
+crudo.
+
+Bug real encontrado al probar: `GuestSearchField` guarda nombre/correo/
+teléfono en `useState` inicializado desde props (`defaultName`, etc.) para
+poder editarlos localmente. Al navegar con un `<Link>` de Next.js (client-
+side, sin recargar la página) hacia una URL con esos valores distintos
+(ej. "Cotizar para este lead"), React reconciliaba el mismo componente en
+vez de desmontarlo, y `useState` **no vuelve a leer su argumento inicial**
+en renders posteriores — el campo se quedaba vacío pese a que la URL y los
+`searchParams` del servidor ya traían el nombre correcto. Se corrigió con
+un `key` en `GuestSearchField` derivado de esos mismos valores
+(`key={`${guestName}|${guestEmail}|${guestPhone}`}`) para forzar un
+remount cuando cambian. Lección para cualquier Client Component nuevo que
+inicialice estado editable desde `searchParams`/props del servidor: si se
+llega a él por navegación client-side (no full reload), necesita un `key`
+atado a esos valores, o el estado queda "pegado" al primer valor con el
+que se montó.
 ### Bug real encontrado al probar contra Supabase (no solo local)
 
 `check_availability()` estaba declarada `stable` pero llama internamente a
@@ -454,11 +483,18 @@ Decisión (0029): no se duplica nada.
 
 - `room_types` gana `base_rate` (tarifa de referencia por noche) — mismo
   nivel que capacidad/mascotas, porque es el nivel al que hoy se cotiza.
-  Es puramente informativa para el staff en esta versión: el formulario de
-  cotización de Reservaciones sigue capturando el monto a mano
-  (`quote_options.subtotal`); conectar `base_rate` automáticamente al flujo
-  de cotización es trabajo del futuro módulo de Tarifas (fuera de alcance
-  explícito de esta sesión), no de Configuración.
+
+  **Actualización (feedback de uso real, misma sesión):** originalmente se
+  documentó aquí como "puramente informativa, el formulario sigue
+  capturando el monto a mano" — eso cambió al usar la app: la búsqueda de
+  disponibilidad de Reservaciones (`searchAvailableOptions()`, ver
+  `modules/reservaciones/queries/availability.ts`) ahora sí precarga
+  `base_rate` como tarifa por defecto de cada opción mostrada, editable
+  antes de cotizar. Esto NO es el motor de tarifas dinámicas/temporadas
+  (`base_rate` sigue siendo un solo número fijo por tipo, sin fechas ni
+  reglas) — eso sigue siendo el futuro módulo de Tarifas — pero cerrar el
+  ciclo "la tarifa que configuras es la que ves al cotizar" sí se pidió
+  explícitamente y no ameritaba esperar a ese módulo.
 - `rooms` gana `building` (zona/edificio) y `bed_type` (catálogo cerrado
   chico vía `check`) — estos SÍ son atributos de la unidad física: dos
   habitaciones del mismo `room_type` pueden estar en edificios distintos o
@@ -540,6 +576,14 @@ catálogo de activos entregables de Recepción; facturación, planes de
 suscripción y branding del hotel; roles personalizados por hotel (la
 columna `roles.hotel_id` ya lo modela desde 0004, pero crear roles sigue
 restringido a `platform_admin` — ver 0006).
+
+**Actualización (feedback de uso real, misma sesión):** "branding del
+hotel" se pidió parcialmente después de cerrar este alcance — un solo
+color de acento (`updateBrandColor()`, guardado en
+`hotel_policies.extra_settings.brand_color`, aplicado vía CSS custom
+properties con `brandStyleVars()` en `src/lib/color.ts`). Sigue fuera de
+alcance todo lo demás de branding completo: logo, tipografía, favicon,
+white-label.
 
 ## Convenciones de nombres
 

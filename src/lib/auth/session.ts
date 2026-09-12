@@ -33,9 +33,17 @@ export async function getCurrentUserHotel() {
   if (error) throw error;
   if (!data) return null;
 
+  const { data: policies } = await supabase
+    .from("hotel_policies")
+    .select("extra_settings")
+    .eq("hotel_id", data.hotel_id)
+    .maybeSingle();
+  const brandColor = (policies?.extra_settings as { brand_color?: string } | null)?.brand_color ?? null;
+
   return {
     hotelId: data.hotel_id as string,
     hotelName: (data.hotels as unknown as { name: string } | null)?.name ?? "Hotel",
     roleName: (data.roles as unknown as { name: string } | null)?.name ?? null,
+    brandColor,
   };
 }

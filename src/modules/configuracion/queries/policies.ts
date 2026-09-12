@@ -11,7 +11,9 @@ export async function getHotelPolicies(hotelId: string) {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("hotel_policies")
-    .select("hotel_id, requires_guarantee, guarantee_notes, allows_early_checkin, standard_checkin_time, standard_checkout_time")
+    .select(
+      "hotel_id, requires_guarantee, guarantee_notes, allows_early_checkin, standard_checkin_time, standard_checkout_time, extra_settings",
+    )
     .eq("hotel_id", hotelId)
     .single();
   if (error) throw error;

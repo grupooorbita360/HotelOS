@@ -9,7 +9,7 @@ import {
   updateRoom,
   setRoomActive,
 } from "@/modules/configuracion/actions/rooms";
-import { updateHotelPolicies, updateReceptionSettings } from "@/modules/configuracion/actions/policies";
+import { updateHotelPolicies, updateReceptionSettings, updateBrandColor } from "@/modules/configuracion/actions/policies";
 import { addStaffMember, changeStaffRole, setStaffActive } from "@/modules/configuracion/actions/staff";
 
 function tabUrl(tab: string, extra = "") {
@@ -121,6 +121,12 @@ export async function submitUpdateReceptionSettings(formData: FormData) {
       bloquearCheckoutSaldo: formData.get("bloquearCheckoutSaldo") === "on",
     }),
   );
+}
+
+export async function submitUpdateBrandColor(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const color = String(formData.get("brandColor") || "") || null;
+  await runOrError("politicas", () => updateBrandColor(hotelId, color));
 }
 
 export async function submitAddStaffMember(formData: FormData) {

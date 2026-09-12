@@ -2,6 +2,8 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { signOut } from "@/app/login/actions";
+import { brandStyleVars } from "@/lib/color";
+import { formatDateRange } from "@/lib/format";
 import { listStays, getStayDetails, listAssignableRooms, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
@@ -9,6 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { StayStatusBadge, nextActionLabel } from "@/components/ui/Badge";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import {
   submitRegisterArrival,
   submitCheckIn,
@@ -65,30 +68,15 @@ export default async function RecepcionPage({
   const checkinAssets = detail ? await getHotelCheckinAssets(hotel.hotelId) : [];
 
   return (
-    <div className="min-h-screen bg-background px-6 py-8">
+    <div className="min-h-screen bg-background px-6 py-8" style={brandStyleVars(hotel.brandColor)}>
       <div className="mx-auto max-w-6xl space-y-6 text-sm">
-        <header className="flex items-center justify-between rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-6 py-5 text-white shadow-sm">
-          <div>
-            <h1 className="text-xl font-bold">Recepción — {hotel.hotelName}</h1>
-            <p className="text-white/80">
-              Rol: {hotel.roleName ?? "—"} ·{" "}
-              <Link href="/reservaciones" className="underline">
-                Reservaciones
-              </Link>{" "}
-              ·{" "}
-              <Link href="/configuracion" className="underline">
-                Configuración
-              </Link>{" "}
-              ·{" "}
-              <Link href="/recepcion" className="underline">
-                reiniciar
-              </Link>
-            </p>
-          </div>
-          <form action={signOut}>
-            <button className="text-sm text-white/80 underline hover:text-white">Cerrar sesión</button>
-          </form>
-        </header>
+        <ModuleHeader
+          title="Recepción"
+          hotelName={hotel.hotelName}
+          roleName={hotel.roleName}
+          current="recepcion"
+          resetHref="/recepcion"
+        />
 
         <div className="grid grid-cols-3 gap-4">
           <KpiCard label="Llegadas esperadas" value={counts.expected} />
@@ -119,7 +107,7 @@ export default async function RecepcionPage({
                       <StayStatusBadge status={s.status} />
                     </div>
                     <p className="text-muted">
-                      {rs.room_types?.name} · {rs.check_in} → {rs.check_out}
+                      {rs.room_types?.name} · {formatDateRange(rs.check_in, rs.check_out)}
                     </p>
                     <p className="text-xs font-medium text-brand">{nextActionLabel(s.next_action)}</p>
                     {(s.stay_accounts?.balance ?? 0) > 0 && (
@@ -155,8 +143,8 @@ export default async function RecepcionPage({
                   </div>
                   <p className="text-muted">
                     Folio {detail.stay.reservation_stays!.reservations!.folio} ·{" "}
-                    {detail.stay.reservation_stays!.room_types?.name} · {detail.stay.reservation_stays!.check_in} →{" "}
-                    {detail.stay.reservation_stays!.check_out}
+                    {detail.stay.reservation_stays!.room_types?.name} ·{" "}
+                    {formatDateRange(detail.stay.reservation_stays!.check_in, detail.stay.reservation_stays!.check_out)}
                   </p>
                   <p>
                     Próxima acción: <strong className="text-brand">{nextActionLabel(detail.stay.next_action)}</strong>
@@ -187,7 +175,12 @@ export default async function RecepcionPage({
                         <form action={submitMarkWalked}>
                           <input type="hidden" name="hotelId" value={hotel.hotelId} />
                           <input type="hidden" name="stayId" value={detail.stay.id} />
-                          <Button variant="danger">Marcar Walked</Button>
+                          <Button
+                            variant="danger"
+                            title="El huésped llegó con reserva confirmada pero el hotel no tiene habitación para darle (ej. overbooking) y se le reubica en otro hotel."
+                          >
+                            Marcar Walked
+                          </Button>
                         </form>
                       </>
                     )}

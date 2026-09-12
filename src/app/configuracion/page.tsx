@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { hasPermission } from "@/lib/auth/permissions";
 import { signOut } from "@/app/login/actions";
+import { brandStyleVars } from "@/lib/color";
 import { listRoomTypes, listRooms } from "@/modules/configuracion/queries/rooms";
 import { getHotelPolicies, getReceptionSettings } from "@/modules/configuracion/queries/policies";
 import { listHotelStaff, listSystemRoles } from "@/modules/configuracion/queries/staff";
@@ -11,6 +12,7 @@ import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { Badge } from "@/components/ui/Badge";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import {
   submitCreateRoomType,
   submitUpdateRoomType,
@@ -20,6 +22,7 @@ import {
   submitSetRoomActive,
   submitUpdateHotelPolicies,
   submitUpdateReceptionSettings,
+  submitUpdateBrandColor,
   submitAddStaffMember,
   submitChangeStaffRole,
   submitSetStaffActive,
@@ -113,26 +116,15 @@ export default async function ConfiguracionPage({
   };
 
   return (
-    <div className="min-h-screen bg-background px-6 py-8">
+    <div className="min-h-screen bg-background px-6 py-8" style={brandStyleVars(hotel.brandColor)}>
       <div className="mx-auto max-w-5xl space-y-6 text-sm">
-        <header className="flex items-center justify-between rounded-2xl bg-gradient-to-r from-brand to-brand-dark px-6 py-5 text-white shadow-sm">
-          <div>
-            <h1 className="text-xl font-bold">Configuración — {hotel.hotelName}</h1>
-            <p className="text-white/80">
-              Rol: {hotel.roleName ?? "—"} ·{" "}
-              <Link href="/reservaciones" className="underline">
-                Reservaciones
-              </Link>{" "}
-              ·{" "}
-              <Link href="/recepcion" className="underline">
-                Recepción
-              </Link>
-            </p>
-          </div>
-          <form action={signOut}>
-            <button className="text-sm text-white/80 underline hover:text-white">Cerrar sesión</button>
-          </form>
-        </header>
+        <ModuleHeader
+          title="Configuración"
+          hotelName={hotel.hotelName}
+          roleName={hotel.roleName}
+          current="configuracion"
+          resetHref="/configuracion"
+        />
 
         <div className="flex gap-2 border-b border-border pb-2">
           {availableTabs.map((t) => (
@@ -309,6 +301,28 @@ export default async function ConfiguracionPage({
 
         {tab === "politicas" && hotelPolicies && receptionSettings && (
           <div className="grid grid-cols-2 gap-6">
+            <Card className="col-span-2 space-y-4">
+              <CardTitle>Apariencia</CardTitle>
+              <form action={submitUpdateBrandColor} className="flex flex-wrap items-end gap-3">
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <Field label="Color de marca">
+                  <input
+                    type="color"
+                    name="brandColor"
+                    defaultValue={
+                      (hotelPolicies.extra_settings as { brand_color?: string } | null)?.brand_color ?? "#0F766E"
+                    }
+                    className="mt-1.5 h-10 w-20 cursor-pointer rounded-lg border border-border-strong bg-surface"
+                  />
+                </Field>
+                <p className="max-w-sm text-muted">
+                  Se usa en el encabezado y los acentos de las 3 páginas. Sin motor de branding completo todavía (logo,
+                  etc.) — sólo este color.
+                </p>
+                <Button>Guardar color</Button>
+              </form>
+            </Card>
+
             <Card className="space-y-4">
               <CardTitle>Reservaciones y garantía</CardTitle>
               <form action={submitUpdateHotelPolicies} className="space-y-3">

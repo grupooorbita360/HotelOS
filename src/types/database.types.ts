@@ -559,7 +559,15 @@ export interface Database {
           status?: string;
         };
         Update: Partial<Database["public"]["Tables"]["guarantees"]["Insert"]>;
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "guarantees_reservation_id_fkey";
+            columns: ["reservation_id"];
+            isOneToOne: false;
+            referencedRelation: "reservations";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       payments: {
         Row: {
@@ -595,7 +603,15 @@ export interface Database {
           notes?: string | null;
         };
         Update: never;
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "payments_reservation_id_fkey";
+            columns: ["reservation_id"];
+            isOneToOne: false;
+            referencedRelation: "reservations";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       reception_settings: {
         Row: {
