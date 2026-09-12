@@ -195,6 +195,9 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0026_reception_functions.sql` | Máquina de estados de Estancia y gates: `register_arrival()`, `check_in()`, `assign_room()`, `deliver_room()`, `mark_no_show()`, `mark_walked()`, `register_stay_transaction()`, `void_stay_transaction()`, `attempt_check_out()`, `can_deliver_room()`, `check_out_readiness()` |
 | `0027_seed_front_desk_payments.sql` | Fix: agrega `payments.register` al rol `front_desk` (faltaba desde el seed original) |
 | `0028_fix_stay_transactions_created_by.sql` | Fix: `register_stay_transaction()`/`void_stay_transaction()` no fijaban `created_by` (ver sección de Recepción) |
+| `0029_room_catalog_fields.sql` | `room_types.base_rate`; `rooms.building`, `rooms.bed_type` (Módulo 04, ver sección de Configuración) |
+| `0030_profiles_email_sync.sql` | `profiles.email`, sincronizado por trigger desde `auth.users` (alta y cambio de correo) |
+| `0031_staff_lookup_function.sql` | `find_user_id_by_email()` — SECURITY DEFINER, gate `staff.manage`, usado por el alta de usuarios de Configuración |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -429,6 +432,115 @@ saldo a favor; integración automática de incidencias hacia un futuro módulo
 de Mantenimiento (`stay_incidents` se registra y se resuelve manualmente,
 sin flujo automático todavía); Late Check-Out/Early Check-In configurables.
 
+## Configuración: decisiones de esquema (Módulo 04)
+
+Módulo deliberadamente ligero: sólo lo que Reservaciones y Recepción ya
+necesitan de verdad (dejaron de editarse a mano en Supabase), no un centro
+de configuración exhaustivo. Cubre catálogo de habitaciones, políticas del
+hotel y usuarios/roles.
+
+### Catálogo de habitaciones: por qué NO es una tabla nueva ni un campo duplicado
+
+El pedido original describía "habitaciones" con capacidad máxima, si acepta
+mascotas y tarifa base — pero `capacity_adults`, `capacity_children` y
+`accepts_pets` **ya existían desde 0010 en `room_types`** (la categoría
+vendible), no en `rooms` (la unidad física). Esto no es casualidad: todo el
+motor de Reservaciones cotiza y bloquea inventario por `room_type_id`,
+nunca por `Room` individual (ver Módulo 02, `attempt_inventory_hold()`).
+Mover esos campos a `rooms` habría creado una segunda fuente de verdad para
+el mismo dato y roto esa premisa.
+
+Decisión (0029): no se duplica nada.
+
+- `room_types` gana `base_rate` (tarifa de referencia por noche) — mismo
+  nivel que capacidad/mascotas, porque es el nivel al que hoy se cotiza.
+  Es puramente informativa para el staff en esta versión: el formulario de
+  cotización de Reservaciones sigue capturando el monto a mano
+  (`quote_options.subtotal`); conectar `base_rate` automáticamente al flujo
+  de cotización es trabajo del futuro módulo de Tarifas (fuera de alcance
+  explícito de esta sesión), no de Configuración.
+- `rooms` gana `building` (zona/edificio) y `bed_type` (catálogo cerrado
+  chico vía `check`) — estos SÍ son atributos de la unidad física: dos
+  habitaciones del mismo `room_type` pueden estar en edificios distintos o
+  tener camas distintas.
+
+La pantalla de Configuración por eso tiene dos secciones (Tipos de
+habitación / Habitaciones físicas), no una tabla plana — refleja el
+esquema real en vez de forzar los dos niveles en uno.
+
+### Políticas del hotel: por qué NO se fusionan `hotel_policies` y `reception_settings`
+
+Se pidió unificar en una sola pantalla clara las configuraciones que
+Reservaciones (`hotel_policies`, Módulo 02) y Recepción
+(`reception_settings`, Módulo 03) ya usan. Revisando ambas: **no hay ni un
+solo campo duplicado o en conflicto entre ellas** — cada una gobierna gates
+de su propio módulo (garantía/horarios en una, entrega/checkin
+sucia/no-show/checkout en la otra). Fusionarlas en una tabla habría violado
+la regla 7 (los módulos no se importan/mezclan entre sí) al nivel de
+esquema, y `reception_settings` seguiría siendo, por diseño, propiedad de
+Recepción (Módulo 03 ya documentó por qué existe separada).
+
+Decisión: **unificación sólo en la UI**, nunca en el esquema. La pantalla
+"Políticas del hotel" de Configuración es dos `Card` una junto a otra, cada
+una escribiendo a su tabla de siempre. Configuración define su propia
+lectura/escritura mínima contra ambas tablas
+(`modules/configuracion/queries|actions/policies.ts`) en vez de importar
+las de `modules/recepcion/` (regla 7 es explícita: los módulos no se
+importan entre sí, ni siquiera para una lectura de una fila). Es una
+duplicación deliberada de una función de 5 líneas, no de una tabla.
+
+No se expuso edición de `hotel_policies.checkin_assets` (catálogo de
+activos) en esta pantalla: el pedido lo marcó explícitamente fuera de
+alcance ("ya existe básico en Recepción, no lo expandas todavía"). Sigue
+editable sólo por SQL hasta que se pida ese trabajo.
+
+### Usuarios y roles: la única excepción deliberada a "nunca uses admin.ts"
+
+"Invitar" un usuario que todavía no tiene cuenta en HotelOS requiere crear
+su fila en `auth.users` — y **eso no se puede hacer con RLS**: no es una
+tabla `public.*`, no hay política que un cliente autenticado pueda
+satisfacer para insertar ahí, sólo la Admin API de Supabase puede hacerlo.
+Es la única razón de este proyecto para tocar `src/lib/supabase/admin.ts`
+fuera de un job de sistema, y se acotó lo más posible:
+
+1. `requirePermission(hotelId, 'staff.manage')` corre primero (capa de UX,
+   igual que cualquier Server Action).
+2. `find_user_id_by_email()` (0031, SECURITY DEFINER) decide si el correo
+   ya tiene cuenta. Vuelve a validar `has_permission(hotel_id,
+   'staff.manage')` **adentro de la función**, no confía en que el Server
+   Action ya lo haya hecho — mismo patrón de defensa-en-profundidad que
+   `register_stay_transaction()` — y sólo devuelve un `uuid` o `null`,
+   nunca una fila de `auth.users`.
+3. Sólo si no existe cuenta, se usa `createAdminClient()` — y únicamente
+   para `auth.admin.inviteUserByEmail()`. Ese es el límite exacto del
+   privilegio: crear la cuenta y mandar el correo de invitación.
+4. La escritura que de verdad importa — asignar el rol en
+   `user_hotel_roles` — **siempre** se hace con el cliente normal
+   (`createClient()`), sujeta a la misma RLS que cualquier otra escritura
+   del proyecto (`has_permission(hotel_id, 'staff.manage')`), sin importar
+   si el usuario ya existía o se acaba de invitar.
+
+`profiles` no tenía columna `email` (0003) — sólo vivía en `auth.users`,
+que un usuario normal no puede leer vía PostgREST. La pantalla de
+Usuarios necesita mostrar el correo para identificar a alguien cuyo
+`full_name` puede seguir vacío (invitación no aceptada todavía). Se agregó
+`profiles.email` (0030) sincronizada por trigger en alta y en cambio de
+correo — nunca escrita a mano, mismo espíritu que `set_audit_fields()`.
+
+Resguardo agregado (no pedido explícitamente, pero directamente ligado al
+modelo de acceso): ni `changeStaffRole()` ni `setStaffActive()` permiten
+dejar a un hotel sin ningún `hotel_admin` activo — evita que un hotel se
+quede sin nadie que pueda administrarlo. Es una sola consulta de conteo,
+no un motor de reglas.
+
+### Alcance de esta sesión (fuera de alcance a propósito)
+
+Tarifas dinámicas/temporadas (módulo de Tarifas futuro); expandir el
+catálogo de activos entregables de Recepción; facturación, planes de
+suscripción y branding del hotel; roles personalizados por hotel (la
+columna `roles.hotel_id` ya lo modela desde 0004, pero crear roles sigue
+restringido a `platform_admin` — ver 0006).
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
@@ -455,6 +567,7 @@ src/
     login/                Login/signup mínimo con Supabase Auth (email+password).
     reservaciones/        Página de prueba del módulo: buscar → cotizar → Hold → confirmar → listado.
     recepcion/            Página de prueba del módulo: llegada → check-in → asignar → entregar → cobrar → check-out.
+    configuracion/        Página de prueba del módulo: catálogo de habitaciones, políticas del hotel, usuarios y roles (tabs).
   proxy.ts                Refresca la sesión de Supabase en cada request (convención Next.js 16; reemplaza a middleware.ts).
   lib/
     supabase/
@@ -474,6 +587,9 @@ src/
     recepcion/
       actions/             lifecycle.ts (transiciones de Estancia), account.ts (cuenta/transacciones), service.ts (solicitudes/incidencias/activos).
       queries/             stays.ts — listado, detalle, habitaciones asignables, config y catálogo de activos.
+    configuracion/
+      actions/             rooms.ts (tipos/habitaciones), policies.ts (hotel_policies/reception_settings), staff.ts (alta/rol/activación).
+      queries/             rooms.ts, policies.ts, staff.ts — lecturas propias, no importadas de otros módulos (regla 7).
     rack/ habitaciones/ caja/  (carpetas listas, sin lógica todavía)
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.

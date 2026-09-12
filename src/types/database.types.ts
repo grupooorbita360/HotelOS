@@ -48,6 +48,7 @@ export interface Database {
         Row: {
           id: string;
           full_name: string | null;
+          email: string | null;
           phone: string | null;
           is_platform_admin: boolean;
           is_active: boolean;
@@ -139,7 +140,22 @@ export interface Database {
           is_active?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["user_hotel_roles"]["Insert"]>;
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "user_hotel_roles_user_id_fkey";
+            columns: ["user_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "user_hotel_roles_role_id_fkey";
+            columns: ["role_id"];
+            isOneToOne: false;
+            referencedRelation: "roles";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       hotel_policies: {
         Row: {
@@ -206,6 +222,7 @@ export interface Database {
           capacity_adults: number;
           capacity_children: number;
           accepts_pets: boolean;
+          base_rate: number;
           is_active: boolean;
           created_at: string;
           created_by: string | null;
@@ -220,6 +237,7 @@ export interface Database {
           capacity_adults?: number;
           capacity_children?: number;
           accepts_pets?: boolean;
+          base_rate?: number;
           is_active?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["room_types"]["Insert"]>;
@@ -231,6 +249,8 @@ export interface Database {
           hotel_id: string;
           room_type_id: string;
           code: string;
+          building: string | null;
+          bed_type: string | null;
           is_active: boolean;
           is_clean: boolean;
           created_at: string;
@@ -243,11 +263,21 @@ export interface Database {
           hotel_id: string;
           room_type_id: string;
           code: string;
+          building?: string | null;
+          bed_type?: string | null;
           is_active?: boolean;
           is_clean?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["rooms"]["Insert"]>;
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "rooms_room_type_id_fkey";
+            columns: ["room_type_id"];
+            isOneToOne: false;
+            referencedRelation: "room_types";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       leads: {
         Row: {
@@ -886,6 +916,10 @@ export interface Database {
       attempt_check_out: {
         Args: { p_stay_id: string };
         Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      find_user_id_by_email: {
+        Args: { p_hotel_id: string; p_email: string };
+        Returns: string | null;
       };
     };
     Enums: Record<string, never>;

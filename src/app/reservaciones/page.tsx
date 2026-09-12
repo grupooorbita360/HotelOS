@@ -75,6 +75,10 @@ export default async function ReservacionesPage({
                 Recepción
               </Link>{" "}
               ·{" "}
+              <Link href="/configuracion" className="underline">
+                Configuración
+              </Link>{" "}
+              ·{" "}
               <Link href="/reservaciones" className="underline">
                 reiniciar
               </Link>

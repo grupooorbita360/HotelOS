@@ -12,6 +12,12 @@ import type { Database } from "@/types/database.types";
  *
  * SUPABASE_SERVICE_ROLE_KEY nunca debe exponerse al cliente/navegador ni
  * tener el prefijo NEXT_PUBLIC_.
+ *
+ * Única excepción documentada: `modules/configuracion/actions/staff.ts` lo
+ * usa para `auth.admin.inviteUserByEmail()` al dar de alta un usuario sin
+ * cuenta todavía (crear la fila en auth.users no puede pasar por RLS). Ver
+ * CLAUDE.md, sección "Usuarios y roles" del Módulo 04, para el razonamiento
+ * completo y por qué esa excepción está acotada a ese único paso.
  */
 export function createAdminClient() {
   return createSupabaseClient<Database>(
