@@ -179,3 +179,23 @@ export async function setRoomActive(hotelId: string, roomId: string, isActive: b
     entityId: roomId,
   });
 }
+
+export async function setRoomClean(hotelId: string, roomId: string, isClean: boolean) {
+  await requirePermission(hotelId, "hotel.settings.manage");
+  const supabase = await createClient();
+
+  const { error } = await supabase
+    .from("rooms")
+    .update({ is_clean: isClean })
+    .eq("id", roomId)
+    .eq("hotel_id", hotelId);
+  if (error) throw error;
+
+  await logTimelineEvent({
+    hotelId,
+    module: "core",
+    eventType: isClean ? "room.marked_clean" : "room.marked_dirty",
+    entityType: "room",
+    entityId: roomId,
+  });
+}

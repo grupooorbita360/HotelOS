@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import {
   createRoomType,
   updateRoomType,
@@ -8,6 +9,7 @@ import {
   createRoom,
   updateRoom,
   setRoomActive,
+  setRoomClean,
 } from "@/modules/configuracion/actions/rooms";
 import { updateHotelPolicies, updateReceptionSettings, updateBrandColor } from "@/modules/configuracion/actions/policies";
 import { addStaffMember, changeStaffRole, setStaffActive } from "@/modules/configuracion/actions/staff";
@@ -23,6 +25,7 @@ async function runOrError(tab: string, fn: () => Promise<unknown>) {
     const message = error instanceof Error ? error.message : "Error desconocido";
     redirect(tabUrl(tab, `&error=${encodeURIComponent(message)}`));
   }
+  revalidatePath("/configuracion");
   redirect(tabUrl(tab));
 }
 
@@ -96,6 +99,13 @@ export async function submitSetRoomActive(formData: FormData) {
   const roomId = String(formData.get("roomId"));
   const isActive = formData.get("isActive") === "true";
   await runOrError("habitaciones", () => setRoomActive(hotelId, roomId, isActive));
+}
+
+export async function submitSetRoomClean(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const roomId = String(formData.get("roomId"));
+  const isClean = formData.get("isClean") === "true";
+  await runOrError("habitaciones", () => setRoomClean(hotelId, roomId, isClean));
 }
 
 export async function submitUpdateHotelPolicies(formData: FormData) {

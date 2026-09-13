@@ -749,6 +749,80 @@ batería completa de Reservaciones (`check_availability()`,
 `cancel_reservation()`, ciclo Hold→Reserva→Cancelar) sobre el esquema con
 0033+0034 aplicadas: mismos resultados que siempre, nada se rompió.
 
+### `estatus_limpieza` / `estatus_venta`: no son campos nuevos, ya existen (verificado contra Supabase real)
+
+Se pidió confirmar si `estatus_limpieza` (enum Limpia/Sucia, default
+"Sucia") ya existía en `rooms`, y si no, agregarlo; lo mismo para
+`estatus_venta` con valores "Fuera de Servicio"/"Mantenimiento". Se
+verificó **contra la API REST real de Supabase** (no sólo el código,
+como se pidió explícitamente), consultando `rooms` directo:
+
+- **`estatus_limpieza` no existe con ese nombre.** El campo real es
+  `rooms.is_clean` (boolean, agregado en `0021_rooms_cleanliness.sql`),
+  con default `true` — polaridad opuesta a la asumida en la pregunta
+  (`true` = Limpia, `false` = Sucia; una habitación nueva nace "Limpia",
+  no "Sucia"). Ya es consumido por el gate de limpieza de `check_in()`
+  (`0026`) y por `listRoomAssignmentOptions()`/`getStayDetails()` de
+  Recepción. Es exactamente el mismo concepto binario que pedía
+  `estatus_limpieza` (Limpia/Sucia son sólo dos valores) — agregar una
+  columna nueva en paralelo habría creado dos fuentes de verdad para lo
+  mismo (regla 6), una de las cuales (la nueva) no la leería ningún gate
+  real. Decisión: **no se creó columna nueva**; `rooms.is_clean` sigue
+  siendo la única fuente de verdad, y esta sección documenta el nombre y
+  los valores exactos para que el futuro módulo Rack lea este campo
+  (`is_clean = true` ↔ "Limpia", `is_clean = false` ↔ "Sucia").
+- **`estatus_venta` tampoco existe con ese nombre**, y "Fuera de Servicio"
+  no es un valor a agregar: **ya es el texto que la UI de Configuración
+  usa hoy** para `rooms.is_active = false` (`src/app/configuracion/page.tsx`,
+  badge `"En venta"` / `"Fuera de servicio"`). No existe un tercer valor
+  "Mantenimiento" distinto de "Fuera de Servicio" — igual que con
+  `block_type` en `0033` (`maintenance` ya cubría el mismo concepto que el
+  "MANTENIMIENTO" pedido entonces), duplicar aquí un tercer estado para lo
+  mismo que ya representa `is_active = false` habría violado la regla 6.
+  `is_active` además ya gobierna disponibilidad real
+  (`check_availability()`, `attempt_inventory_hold()`,
+  `assign_room_for_checkin()` filtran físicamente por `is_active`) — no es
+  sólo una bandera de catálogo. Decisión: **no se creó columna ni valor
+  nuevo**; Rack debe leer `rooms.is_active` (`true` ↔ "En venta",
+  `false` ↔ "Fuera de servicio").
+- Gap real encontrado y sí corregido: `is_clean` ya existía y ya se leía
+  en Recepción, pero **no era editable desde la pantalla de Configuración**
+  (sólo `is_active` lo era, con el patrón "Desactivar/Reactivar"). Se
+  agregó `setRoomClean()` (`src/modules/configuracion/actions/rooms.ts`,
+  mismo patrón que `setRoomActive()`) y un botón "Marcar sucia/Marcar
+  limpia" junto al badge Limpia/Sucia en la fila de cada habitación física
+  de `/configuracion?tab=habitaciones` — sin tabla, pantalla ni columna
+  nueva, tal como se pidió ("sólo el campo, editable desde la pantalla que
+  ya existe"). No requirió migración: la política RLS de `rooms` (`0010`,
+  `rooms_write_settings_manager_or_platform_admin`) ya cubre cualquier
+  columna de la tabla para quien tiene `hotel.settings.manage`.
+
+**Bug real encontrado al probar este botón contra la app real (no sólo
+`psql`/REST):** los tres toggles de Configuración (`setRoomActive`,
+`setRoomTypeActive`, y el nuevo `setRoomClean`) pasan por el mismo
+`runOrError()` en `src/app/configuracion/actions.ts`, que llama
+`redirect()` de vuelta a la **misma URL** (`/configuracion?tab=habitaciones`)
+tras la mutación. Sin `revalidatePath()`, Next.js sirve esa navegación
+desde el Router Cache del cliente en vez de pedir un render fresco del
+Server Component — el valor mostrado quedaba un clic completo "atrasado"
+respecto a la base de datos real (confirmado con Playwright: clics
+sucesivos sobre el mismo botón mostraban siempre el estado anterior al
+último clic, aunque la fila en Supabase sí tenía el valor correcto en
+cada paso). No se manifestó antes porque los flujos de Reservaciones/
+Recepción navegan a URLs con un parámetro distinto tras cada acción
+(`?reservationId=`, `?checkinStep=`), lo que por sí solo invalida la
+entrada de caché; Configuración fue el primer módulo en redirigir
+siempre a la URL exacta de la que partió. Corregido agregando
+`revalidatePath("/configuracion")` en `runOrError()`, antes del
+`redirect()` de éxito — cubre los tres toggles y cualquier mutación
+futura de este archivo por el mismo punto único. Lección para cualquier
+Server Action nueva que haga `redirect()` de vuelta a la URL de origen
+(no a una con parámetros distintos): sin `revalidatePath()` el usuario ve
+un estado desactualizado hasta la siguiente navegación real, y esto sólo
+se detecta probando clics repetidos contra la app corriendo — ni `psql`
+ni una sola verificación con Playwright (sin repetir el toggle) lo
+revelan.
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural

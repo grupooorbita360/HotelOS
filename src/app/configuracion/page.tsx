@@ -19,6 +19,7 @@ import {
   submitCreateRoom,
   submitUpdateRoom,
   submitSetRoomActive,
+  submitSetRoomClean,
   submitUpdateHotelPolicies,
   submitUpdateReceptionSettings,
   submitUpdateBrandColor,
@@ -228,7 +229,10 @@ export default async function ConfiguracionPage({
                   <div key={r.id} className={`rounded-lg border p-3 ${r.is_active ? "border-border" : "border-border bg-border/40 opacity-60"}`}>
                     <div className="flex items-center justify-between">
                       <b>{r.code}</b>
-                      <Badge tone={r.is_active ? "success" : "neutral"}>{r.is_active ? "En venta" : "Fuera de servicio"}</Badge>
+                      <div className="flex gap-2">
+                        <Badge tone={r.is_clean ? "success" : "warning"}>{r.is_clean ? "Limpia" : "Sucia"}</Badge>
+                        <Badge tone={r.is_active ? "success" : "neutral"}>{r.is_active ? "En venta" : "Fuera de servicio"}</Badge>
+                      </div>
                     </div>
                     <p className="text-muted">
                       {(r.room_types as unknown as { name: string } | null)?.name ?? "—"}
@@ -239,6 +243,12 @@ export default async function ConfiguracionPage({
                       <Link href={`/configuracion?tab=habitaciones&editRoomId=${r.id}`} className="text-brand underline">
                         Editar
                       </Link>
+                      <form action={submitSetRoomClean}>
+                        <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                        <input type="hidden" name="roomId" value={r.id} />
+                        <input type="hidden" name="isClean" value={(!r.is_clean).toString()} />
+                        <button className="text-brand underline">{r.is_clean ? "Marcar sucia" : "Marcar limpia"}</button>
+                      </form>
                       <form action={submitSetRoomActive}>
                         <input type="hidden" name="hotelId" value={hotel.hotelId} />
                         <input type="hidden" name="roomId" value={r.id} />
