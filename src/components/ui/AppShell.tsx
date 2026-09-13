@@ -6,6 +6,7 @@ import { brandStyleVars } from "@/lib/color";
 const MODULES = [
   { key: "reservaciones", label: "Reservaciones", href: "/reservaciones", icon: "📅" },
   { key: "recepcion", label: "Recepción", href: "/recepcion", icon: "🛎️" },
+  { key: "rack", label: "Rack", href: "/rack", icon: "🗓️" },
   { key: "configuracion", label: "Configuración", href: "/configuracion", icon: "⚙️" },
 ] as const;
 

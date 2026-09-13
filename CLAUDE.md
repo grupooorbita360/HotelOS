@@ -823,6 +823,144 @@ se detecta probando clics repetidos contra la app corriendo — ni `psql`
 ni una sola verificación con Playwright (sin repetir el toggle) lo
 revelan.
 
+## Rack: decisiones de esquema (Módulo 05)
+
+Pedido explícito y no negociable de esta sesión: el Rack es una capa de
+**vista**, no de dominio. Sin tablas propias (ninguna `rack_*`) y sin
+recalcular disponibilidad — lee lo que ya calculan/guardan otros módulos:
+
+- **Reservaciones**: `reservation_stays` (fechas/tipo vendido) +
+  `inventory_blocks` (bloqueos comerciales, incluida la extensión física de
+  `0033`: `room_id`/`reason`/`created_by`).
+- **Recepción**: `stays` (estado físico) + `room_assignments` (habitación
+  física actual de cada estancia).
+- **Habitaciones/Configuración**: `rooms.is_clean` (limpieza) y
+  `rooms.is_active` (fuera de servicio) — los nombres reales ya confirmados
+  contra Supabase en la sección anterior, no `estatus_limpieza`/
+  `estatus_venta`.
+
+Todo se combina en memoria en `src/modules/rack/queries/grid.ts`
+(`getRackGrid()`), con varias consultas simples por tabla — mismo estilo que
+`getStayDetails()` de Recepción — en vez de un único `select` con embeds
+gigante (evita el riesgo de `GenericStringError`, regla 10, y es más fácil
+razonar qué tabla aporta qué dato). Cero migraciones nuevas: todo lo que el
+Rack necesita leer y escribir (vía `assign_room()`, 0026) ya existía.
+
+### Por qué una reserva sin habitación física no se "pinta" sobre ninguna fila
+
+`reservation_stays.room_id` existe en el esquema desde `0014` pero **ningún
+código lo escribe jamás** (se confirmó releyendo Reservaciones/Recepción
+antes de construir esto) — la asignación física real vive únicamente en
+`room_assignments`, resuelta hasta Recepción. Eso significa que "reserva
+confirmada, tipo vendido, sin habitación todavía" no puede pintarse de forma
+honesta sobre una fila concreta de la cuadrícula: no hay dato que diga cuál
+de las N habitaciones libres de ese tipo "es" esa reserva.
+
+Se consideró y se descartó repartir esas reservas heurísticamente sobre
+habitaciones libres del tipo sólo para que se vieran en la cuadrícula — eso
+habría sido inventar un algoritmo de asignación/bin-packing propio del Rack
+únicamente para dibujar, exactamente lo que esta tarea prohibió de forma
+explícita. En vez de eso, se listan en su propia sección ("Reservas
+confirmadas sin habitación asignada", con su propio KPI) — coincide con lo
+pedido explícitamente en el alcance del MVP, no es un rodeo.
+
+Esto deja la prioridad "`RESERVED` por habitación" del enunciado original
+implementada pero inerte en la práctica hoy: sólo se activaría si
+`reservation_stays.room_id` llegara a escribirse en el futuro (una
+pre-asignación comercial explícita, distinta de la operativa de Recepción).
+El mismo razonamiento aplica a `BLOCKED`: un `inventory_block` comercial
+(`hold`/`reservation`/`overbooking`) sin `room_id` — el caso normal — es
+consumo a nivel de TIPO, no de una unidad física; `BLOCKED` sólo se enciende
+cuando el bloqueo YA trae `room_id` (0033), lo cual hoy nada escribe todavía
+(esa función es del futuro módulo Rack de bloqueos manuales, explícitamente
+fuera de alcance de esta sesión). Documentado aquí para que ninguna sesión
+futura reabra esta decisión sin saber que ya se evaluó y descartó la
+alternativa.
+
+### KPIs "de hoy" independientes de la ventana que se está navegando
+
+Con Anterior/Siguiente el usuario puede estar viendo, por ejemplo, el 20-30
+de octubre; las KPIs ("Ocupadas hoy", "Llegadas hoy"...) deben seguir
+reflejando el día real de hoy, no el primer día de la ventana visible.
+`getRackGrid()` por eso consulta una ventana de cobertura que siempre
+incluye la fecha de hoy (unión de la ventana visible + hoy) y calcula el
+estado de cada habitación para hoy con la misma función (`computeCell`) que
+pinta la cuadrícula, exponiendo al cliente sólo el sub-rango visible. Un
+solo cálculo, dos usos — nunca una segunda lógica paralela para las KPIs.
+
+### Conflicto real: detectado al leer, no prevenido con una tabla nueva
+
+`assign_room()` (0026, sin tocar) ya evita crear un conflicto nuevo
+(`ROOM_ALREADY_OCCUPIED`), pero el Rack además detecta, por si acaso, dos
+casos reales al leer: (a) dos `room_assignments` activos apuntando a la
+misma habitación con estancias activas que se traslapan en fecha, (b) una
+estancia activa y un bloqueo `maintenance` sobre la misma habitación/fecha
+simultáneamente. Ambos se marcan con un indicador distinto (⚠ Conflicto +
+`title` con el motivo) — nunca sólo un color, tal como se pidió.
+
+### Mover de habitación (drag & drop vertical) reusa `assign_room()`, no una función nueva
+
+El movimiento vertical (misma fecha, otra habitación) llama a `assign_room()`
+de Recepción (0026) vía RPC — la misma función que ya usa el flujo "Asignar
+habitación (equivalente)" de Recepción. No se creó una función
+`move_room_assignment()` paralela: `assign_room()` ya valida tipo
+equivalente y ocupación del destino, y el trigger genérico de auditoría de
+`room_assignments` ya registra quién hizo el cambio y cuándo. Lo único que el
+Rack agrega encima es un evento de timeline
+(`room.assigned_from_rack`/`room.reassigned_from_rack`, con
+`previous_room_id`/`new_room_id`/`reason` en el payload) para que quede
+trazado también en la bitácora de negocio, más el motivo opcional que pidió
+esta tarea y que `assign_room()` no acepta como parámetro.
+
+Por lo mismo, el Rack sólo puede mover a una habitación del MISMO tipo
+vendido — `assign_room()` rechaza con `ROOM_TYPE_MISMATCH` si no lo es.
+Upgrade/downgrade con cobro de diferencia sigue siendo exclusivo del flujo
+guiado de check-in (`assign_room_for_checkin()`, 0032); no se duplicó esa
+lógica de cobro aquí.
+
+Nunca es optimista: `RackGrid` (Client Component) muestra un panel de
+confirmación tras soltar, y sólo refresca la vista (`router.refresh()`)
+después de que el Server Action confirma éxito contra la base de datos; si
+`assign_room()` rechaza el movimiento, el error real de Postgres se muestra
+tal cual en el panel y nada se mueve visualmente antes de eso.
+
+### Cache de 45s, invalidado explícitamente al mover/asignar
+
+`getRackGrid()` guarda el resultado combinado en un `Map` en memoria del
+proceso de Node (TTL 45s) por `hotelId:start:days` — "cache simple" tal como
+se pidió, no una capa de infraestructura nueva. **No se pudo usar
+`unstable_cache` de Next.js**: internamente la consulta usa `createClient()`
+(Supabase SSR), que lee `cookies()`, y Next.js prohíbe llamar APIs dinámicas
+dentro de una función envuelta en `unstable_cache` (falla en tiempo de
+ejecución). El cache es seguro de compartir entre todo el personal del mismo
+hotel: las filas que puede leer un miembro cualquiera vía RLS son las mismas
+para cualquier otro miembro del mismo hotel (la política de SELECT sólo
+filtra por `hotel_id`, no por rol) — no hay dato personalizado por usuario en
+esta pantalla. Cualquier acción que mute algo que el Rack muestra
+(`assignRoomFromRack()`) llama `invalidateRackCache(hotelId)` de inmediato,
+además de `revalidatePath("/rack")` en el flujo de formulario plano de la
+sección "Reservas sin asignar" — la lección del bug de cache de Configuración
+(ver arriba) ya estaba fresca al construir esto.
+
+### Bug real encontrado al probar contra Supabase real (no sólo local)
+
+Antes de poder probar el Rack contra la app real, se encontró que la base de
+Supabase de este proyecto **no tenía aplicada la migración `0033`** (que sí
+está commiteada en el repo desde antes, y sí está aplicada en el Postgres
+local de pruebas de esta sesión) — `inventory_blocks.room_id` no existía
+todavía, y la consulta del Rack fallaba con
+`42703 column inventory_blocks.room_id does not exist`. No es un bug de
+esquema: es una migración que quedó sin correr contra el proyecto real en
+algún momento anterior (lo más probable: al aplicarlas una por una a mano en
+el SQL Editor). Se le reenvió el archivo de la migración (sin cambios) para
+correrla de nuevo. Lección para cualquier sesión futura: que este archivo
+documente que una migración "ya se validó y aplicó" no es garantía de que el
+proyecto de Supabase que se esté usando en un momento dado realmente la
+tenga — si una consulta nueva depende de una columna de una migración
+anterior, vale la pena confirmarlo contra la API real antes de asumir que ya
+existe. Es la misma lección de la regla 9, aplicada aquí a "columna
+faltante" en vez de "función mal marcada".
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
@@ -849,6 +987,7 @@ src/
     login/                Login/signup mínimo con Supabase Auth (email+password).
     reservaciones/        Página de prueba del módulo: buscar → cotizar → Hold → confirmar → listado.
     recepcion/            Página de prueba del módulo: llegada → check-in → asignar → entregar → cobrar → check-out.
+    rack/                 Cuadrícula habitación×fecha (capa de vista, ver sección Rack).
     configuracion/        Página de prueba del módulo: catálogo de habitaciones, políticas del hotel, usuarios y roles (tabs).
   proxy.ts                Refresca la sesión de Supabase en cada request (convención Next.js 16; reemplaza a middleware.ts).
   lib/
@@ -872,7 +1011,11 @@ src/
     configuracion/
       actions/             rooms.ts (tipos/habitaciones), policies.ts (hotel_policies/reception_settings), staff.ts (alta/rol/activación).
       queries/             rooms.ts, policies.ts, staff.ts — lecturas propias, no importadas de otros módulos (regla 7).
-    rack/ habitaciones/ caja/  (carpetas listas, sin lógica todavía)
+    rack/
+      queries/             grid.ts — getRackGrid() (capa de vista, combina Reservaciones/Recepción/Habitaciones, sin tabla propia).
+      actions/             assignments.ts — assignRoomFromRack(), reusa assign_room() (0026) vía RPC.
+      components/          RackGrid.tsx — Client Component: drag & drop vertical + panel de detalle.
+    habitaciones/ caja/  (carpetas listas, sin lógica todavía)
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.
   types/
