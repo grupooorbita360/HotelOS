@@ -961,6 +961,31 @@ anterior, vale la pena confirmarlo contra la API real antes de asumir que ya
 existe. Es la misma lección de la regla 9, aplicada aquí a "columna
 faltante" en vez de "función mal marcada".
 
+## Fecha operativa del hotel (businessDate)
+
+La fecha operativa de un hotel nunca debe calcularse directamente desde UTC
+o desde el navegador. Los módulos deben consumir la fuente central de
+`businessDate` basada en `hotel.timezone` — no reinventar
+`new Date().toISOString().slice(0, 10)` por módulo: dos hoteles en
+timezones distintos, o el mismo hotel cerca de medianoche, verían un "hoy"
+equivocado.
+
+`getHotelBusinessDate(hotelId)` (`src/lib/getHotelBusinessDate.ts`, cálculo
+puro en `src/lib/businessDate.ts`) es esa fuente única: lee `hotels.timezone`
+(columna IANA que ya existía desde `0002_hotels.sql`, sin usarse hasta este
+cambio — no hizo falta migración nueva) y devuelve la fecha calendario de
+ese hotel en ese instante. La usan Rack (`getRackGrid()`) y Reservaciones
+(validación de fechas pasadas); Recepción no tenía ningún cálculo de "hoy"
+en TypeScript que corregir (`mark_no_show()` sí usa `current_date` en SQL —
+ver riesgo documentado, fuera de alcance de este cambio).
+
+Los timestamps técnicos (`created_at`, `updated_at`, `resolved_at`,
+expiración de Holds, `timeline_events`, etc.) siguen en UTC normal — esto
+sólo aplica a "qué día es hoy" para el hotel, no a cuándo ocurrió algo.
+
+Etapa actual: `businessDate` = fecha calendario en el timezone del hotel,
+sin corte nocturno (`business_day_cutoff` queda para una evolución futura).
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural

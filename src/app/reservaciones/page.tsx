@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { signOut } from "@/app/login/actions";
 import { formatDate, formatDateRange, formatDateTime } from "@/lib/format";
+import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
 import { listRoomTypes, searchAvailableOptions } from "@/modules/reservaciones/queries/availability";
 import { listReservations, listActiveHolds } from "@/modules/reservaciones/queries/reservations";
 import { listLeads } from "@/modules/reservaciones/queries/leads";
@@ -89,7 +90,8 @@ export default async function ReservacionesPage({
     : 0;
   const saldoPendiente = Math.max(0, Math.round((totalHospedaje - totalPagado) * 100) / 100);
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Fecha operativa del hotel (su timezone, no UTC/navegador) -- ver CLAUDE.md.
+  const todayIso = await getHotelBusinessDate(hotel.hotelId);
   const searchDateError =
     params.checkIn && params.checkOut
       ? params.checkIn < todayIso

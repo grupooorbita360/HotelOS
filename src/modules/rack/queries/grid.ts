@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
+import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
 
 /**
  * Rack: capa de VISTA, no de dominio. No hay tabla ni algoritmo de
@@ -122,7 +123,8 @@ export async function getRackGrid(hotelId: string, startIso: string, days: numbe
 
 async function fetchRackGrid(hotelId: string, startIso: string, days: number): Promise<RackGridData> {
   const supabase = await createClient();
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Fecha operativa del hotel (su timezone, no UTC del servidor) -- ver CLAUDE.md.
+  const todayIso = await getHotelBusinessDate(hotelId);
 
   const displayEnd = addDays(startIso, days);
   // Las KPIs son siempre "de hoy", sin importar qué ventana esté navegando

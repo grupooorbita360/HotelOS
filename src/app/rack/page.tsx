@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { signOut } from "@/app/login/actions";
 import { formatDate } from "@/lib/format";
+import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
 import { getRackGrid, listAssignableRoomsForType } from "@/modules/rack/queries/grid";
 import { RackGrid } from "@/modules/rack/components/RackGrid";
 import { Card, CardTitle } from "@/components/ui/Card";
@@ -55,7 +56,8 @@ export default async function RackPage({
     );
   }
 
-  const todayIso = new Date().toISOString().slice(0, 10);
+  // Fecha operativa del hotel (su timezone, no UTC/navegador) -- ver CLAUDE.md.
+  const todayIso = await getHotelBusinessDate(hotel.hotelId);
   const start = params.start && /^\d{4}-\d{2}-\d{2}$/.test(params.start) ? params.start : todayIso;
   const days = (VALID_DAYS as readonly number[]).includes(Number(params.days)) ? Number(params.days) : 7;
   const focus = (params.focus as FocusFilter) || "all";
