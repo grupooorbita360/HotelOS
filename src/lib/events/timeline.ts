@@ -18,7 +18,8 @@ export type TimelineModule =
   | "rack"
   | "front_desk"
   | "housekeeping"
-  | "billing";
+  | "billing"
+  | "priorities";
 
 export interface LogTimelineEventInput {
   hotelId: string;

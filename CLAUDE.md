@@ -202,6 +202,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0033_inventory_blocks_physical_extension.sql` | Extensión aditiva de `inventory_blocks`: `room_id`, `reason`, `created_by` + catálogo de `block_type` ampliado (preparación para Rack, ver sección de Reservaciones) |
 | `0034_hotel_policies_iva.sql` | `hotel_policies.iva_porcentaje` — IVA configurable por hotel, solo para desglose contable (ver sección de Configuración) |
 | `0035_no_show_hotel_timezone.sql` | Fix: `mark_no_show()` usaba `current_date` (timezone de la sesión) en vez de `hotels.timezone` (ver sección de Fecha operativa) |
+| `0036_priority_engine.sql` | `hotel_rules`, `hotel_priorities`, permiso `priorities.manage`, funciones `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` y la regla `ARRIVAL_NOT_REGISTERED` (ver sección de Motor de reglas y Prioridades) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -995,6 +996,164 @@ sólo aplica a "qué día es hoy" para el hotel, no a cuándo ocurrió algo.
 Etapa actual: `businessDate` = fecha calendario en el timezone del hotel,
 sin corte nocturno (`business_day_cutoff` queda para una evolución futura).
 
+## Motor de reglas y Prioridades (Mejora transversal 02)
+
+Infraestructura transversal para el paso que faltaba del patrón de este
+documento:
+
+```
+DATOS → ESTADO OPERATIVO → REGLA → PRIORIDAD → NEXT ACTION
+  → USUARIO EJECUTA → RESOLUCIÓN → TIMELINE/HISTORIAL → KPI/RADAR futuro
+```
+
+Dos distinciones que **no se deben re-litigar**:
+
+1. **Catálogo de reglas (`hotel_rules`) ≠ evaluadores.** `hotel_rules` es
+   config/metadata pura (severidad, peso, si permite asignación, etc.) —
+   **nunca contiene código ejecutable ni SQL dinámico**. La condición real
+   de cada regla vive en un evaluador de TypeScript versionado y explícito
+   en `src/modules/priorities/evaluators/` (ej.
+   `arrivalNotRegisteredEvaluator()`), registrado a mano en el mapa
+   `rule.code -> evaluador` de `src/modules/priorities/engine.ts`. Agregar
+   una regla nueva siempre significa escribir un evaluador nuevo, nunca
+   guardar una expresión/condición en una fila.
+2. **Prioridad (`hotel_priorities`) ≠ Tarea manual.** Una prioridad existe
+   porque una condición operacional detectada por HotelOS activó una
+   regla — nunca es algo que un usuario crea a mano. Una futura "Tarea"
+   manual (ej. "limpiar la 305") es otra entidad y otro módulo; no se
+   modeló aquí ni se debe fusionar con esto.
+
+### `hotel_id` nullable en `hotel_rules`: mismo patrón que `roles`
+
+`hotel_id` nulo = regla global de HotelOS (el único caso que existe hoy).
+Con valor = override futuro de esa regla para un hotel concreto — **no
+implementado todavía** (sólo el esquema lo soporta: `unique(hotel_id, code)`
++ índice único parcial para code global, exactamente como `roles`, 0004).
+No hay resolución de "regla efectiva" combinando global+override; el motor
+v1 sólo lee las reglas globales (`hotel_id is null`).
+
+### Por qué no hay `visible_roles`
+
+Se pidió `visible_roles` (o "criterio equivalente compatible con el modelo
+actual de permisos"). El modelo de permisos de este proyecto es por
+capacidad (`has_permission()`), no por visibilidad de fila por rol — y la
+visibilidad de `hotel_priorities` ya la resuelve RLS por membresía de hotel
+(igual que `stays`/`reservations`/`room_assignments`): cualquier miembro
+del hotel ve todas sus prioridades. Agregar `visible_roles` como filtro de
+UI habría duplicado esa garantía con lógica de aplicación en vez de
+Postgres — exactamente el error que la regla 2 de este documento previene.
+`responsible_role` (nullable) sí se agregó, pero es sólo informativo (para
+una futura UI de asignación), nunca control de acceso.
+
+### `auto_resolution_condition` → `supports_auto_resolution` (boolean)
+
+La tarea prohibió explícitamente guardar una condición ejecutable en el
+catálogo. `hotel_rules.supports_auto_resolution` sólo declara si se espera
+que el evaluador de esa regla pueda auto-resolver — la lógica real de "ya
+no aplica" vive en el evaluador y en `auto_resolve_stale_priorities()`
+(ver abajo), nunca en una columna.
+
+### Deduplicación: un índice único parcial, no una comparación en código
+
+`hotel_priorities` tiene un índice único parcial:
+`unique (dedupe_key) where status in ('OPEN','ACKNOWLEDGED','ASSIGNED','IN_PROGRESS')`.
+Esto es lo que permite que `upsert_hotel_priority()` (`SECURITY DEFINER`)
+haga `insert ... on conflict (dedupe_key) where ... do update ...` como una
+sola operación atómica — nunca "leer si existe, luego insertar" desde
+TypeScript, que tendría una ventana de carrera real si el motor llegara a
+correr más de una vez en paralelo (mismo principio que los índices únicos
+parciales de `inventory_blocks`, 0015). Como el índice sólo cubre estados
+**activos**, una prioridad puede resolverse y, más tarde, la misma
+condición puede generar una ocurrencia nueva sin chocar con la fila
+histórica ya resuelta — el historial nunca se borra.
+
+`upsert_hotel_priority()` devuelve `out_is_new` (vía el modismo
+`xmax = 0` del `RETURNING`) para que el motor sepa si esto fue una
+detección genuinamente nueva o sólo un refresco de una ya activa — sólo en
+el primer caso se registra `priority.detected` en el timeline (principio
+"no registrar cada evaluación, sólo cambios significativos").
+
+**Bug real encontrado probando esta función contra Postgres local antes de
+mandarla:** los parámetros de salida de `returns table (...)` se declaran
+como variables plpgsql visibles en todo el cuerpo de la función. Nombrar
+uno `status` (igual que la columna real de `hotel_priorities`) volvía
+ambiguo `where status in (...)` dentro del `ON CONFLICT` — Postgres no
+sabía si era la variable de salida o la columna. Se corrigió prefijando
+los parámetros de salida (`out_priority_id`, `out_status`, `out_is_new`) en
+vez de reusar los nombres de columna. Lección para cualquier función nueva
+con `returns table (...)` que además haga referencia a columnas del mismo
+nombre en su cuerpo: nombra los parámetros de salida de forma que nunca
+puedan coincidir con una columna real.
+
+### `auto_resolve_stale_priorities()`: acotado a una regla a la vez
+
+Recibe la lista completa de `dedupe_key` que el evaluador considera
+vigentes **para esa regla** en esta corrida, y cierra (RESOLVED,
+`auto_resolved = true`) cualquier prioridad activa de esa misma regla cuyo
+`dedupe_key` ya no esté en la lista. Deliberadamente acotado por
+`rule_id` para que nunca resuelva por accidente prioridades de otra regla
+evaluada en la misma corrida del motor.
+
+### Permisos: detección ≠ acción humana
+
+Un solo permiso nuevo, `priorities.manage` (sembrado a `hotel_admin` y
+`front_desk`), gatea únicamente las transiciones manuales
+(acknowledge/assign/in_progress/resolve/dismiss vía
+`src/modules/priorities/actions/lifecycle.ts`, RLS `UPDATE` de
+`hotel_priorities`). La detección/dedupe/auto-resolve del motor
+(`upsert_hotel_priority()`/`auto_resolve_stale_priorities()`) **no**
+exige ese permiso — sólo pertenencia al hotel (mismo criterio que
+`logTimelineEvent()`): es comportamiento de sistema, no una acción de
+negocio privilegiada, y no debe bloquearse para un rol que todavía no
+tiene `priorities.manage`. Lectura (`SELECT`) tampoco requiere el permiso:
+igual que `stays`/`reservations`, cualquier miembro del hotel ve las
+prioridades de su hotel vía RLS — así se cumple "Owner/Manager visibilidad
+completa" sin inventar un permiso sólo para leer.
+
+`hotel_priorities` no tiene política de `INSERT` para el cliente (sólo
+`upsert_hotel_priority()` escribe ahí) ni de `DELETE` nunca — mismo patrón
+que `inventory_holds`/`inventory_blocks`/`reservations` (0015/0016): el
+historial no se borra, es lo que el futuro Radar 360 necesita.
+
+### `DISMISSED` reusa `resolved_at`/`resolved_by`/`resolution_reason`
+
+No se agregaron `dismissed_at`/`dismissed_by`/`dismissal_reason` por
+separado: serían las mismas tres columnas con otro nombre para el mismo
+concepto ("quién/cuándo/por qué se cerró"), justo lo que la regla 6 de
+este documento pide evitar. `DISMISSED` es un cierre terminal igual que
+`RESOLVED`, sólo que sin corregir la condición
+(`auto_resolved` siempre `false` en un dismiss, siempre manual) — la
+acción de dismiss en `lifecycle.ts` exige un motivo no vacío.
+
+### Primera regla vertical: `ARRIVAL_NOT_REGISTERED`
+
+Se descartó a propósito el ejemplo del enunciado de la tarea (habitación
+no lista al llegar el huésped) porque roza Housekeeping. La regla elegida
+se determina enteramente con datos que ya existen —
+`stays.status = 'expected'` + `reservation_stays.check_in` ya pasado según
+`getHotelBusinessDate()` — sin Housekeeping, sin Caja, sin tocar ninguna
+regla de Reservaciones/Recepción ni introducir dinero. No implica
+no-show: `mark_no_show()` (0026/0035) sigue siendo la única decisión que
+cambia el estado de la Estancia; esta prioridad es puramente informativa
+("nadie ha actuado todavía").
+
+### Scoring: determinista, sin dinero
+
+`computePriorityScore()` (`src/modules/priorities/scoring.ts`) es
+`severity_weight + rule.priority_weight` — nada de IA/ML, y a propósito
+**nunca** incluye `impact_amount`: una oportunidad comercial de alto valor
+no debe desplazar una situación operativa crítica sólo por tener más
+impacto económico. Aging/escalation queda para una evolución futura (el
+campo `priority_score` ya vive en la fila, listo para ese cálculo cuando
+se necesite).
+
+### Fuera de alcance a propósito (esta etapa)
+
+Dashboard "Mi Hotel Hoy", Radar 360, editor de reglas, notificaciones
+(push/email/WhatsApp), cron/workers/colas, resolución de
+regla-global-más-override, algoritmo de `group_key`, enforcement de
+`cooldown_minutes` (la columna existe; el motor v1 no la aplica todavía).
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
@@ -1049,6 +1208,12 @@ src/
       queries/             grid.ts — getRackGrid() (capa de vista, combina Reservaciones/Recepción/Habitaciones, sin tabla propia).
       actions/             assignments.ts — assignRoomFromRack(), reusa assign_room() (0026) vía RPC.
       components/          RackGrid.tsx — Client Component: drag & drop vertical + panel de detalle.
+    priorities/
+      engine.ts             evaluateHotelRules() — orquesta evaluadores, dedupe/auto-resolve vía RPC, timeline.
+      scoring.ts             computePriorityScore() — determinista, sin dinero.
+      evaluators/             arrivalNotRegistered.ts — un evaluador de TS por rule.code, registrado a mano en engine.ts.
+      queries/             priorities.ts — listHotelPriorities(), getHotelPriority().
+      actions/             lifecycle.ts — acknowledge/assign/startProgress/resolve/dismiss, todas requirePermission('priorities.manage').
     habitaciones/ caja/  (carpetas listas, sin lógica todavía)
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.

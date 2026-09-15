@@ -215,6 +215,89 @@ export interface Database {
         Update: never;
         Relationships: [];
       };
+      hotel_rules: {
+        Row: {
+          id: string;
+          hotel_id: string | null;
+          code: string;
+          module: string;
+          name: string;
+          description: string | null;
+          category: string;
+          severity: string;
+          priority_weight: number;
+          responsible_role: string | null;
+          allows_assignment: boolean;
+          supports_auto_resolution: boolean;
+          deduplicates: boolean;
+          cooldown_minutes: number;
+          is_active: boolean;
+          version: number;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      hotel_priorities: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          rule_id: string;
+          source_module: string;
+          reference_type: string;
+          reference_id: string | null;
+          category: string;
+          severity: string;
+          priority_score: number;
+          title: string;
+          message: string;
+          action_label: string | null;
+          action_route: string | null;
+          action_context: Json;
+          status: string;
+          assigned_to: string | null;
+          due_at: string | null;
+          detected_at: string;
+          acknowledged_at: string | null;
+          resolved_at: string | null;
+          resolved_by: string | null;
+          auto_resolved: boolean;
+          resolution_reason: string | null;
+          dedupe_key: string;
+          group_key: string | null;
+          source_event_id: string | null;
+          impact_value: number | null;
+          impact_amount: number | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: {
+          status?: string;
+          assigned_to?: string | null;
+          due_at?: string | null;
+          acknowledged_at?: string | null;
+          resolved_at?: string | null;
+          resolved_by?: string | null;
+          auto_resolved?: boolean;
+          resolution_reason?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "hotel_priorities_rule_id_fkey";
+            columns: ["rule_id"];
+            isOneToOne: false;
+            referencedRelation: "hotel_rules";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       room_types: {
         Row: {
           id: string;
@@ -953,6 +1036,33 @@ export interface Database {
       assign_room_for_checkin: {
         Args: { p_stay_id: string; p_room_id: string };
         Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
+      };
+      upsert_hotel_priority: {
+        Args: {
+          p_hotel_id: string;
+          p_rule_id: string;
+          p_source_module: string;
+          p_reference_type: string;
+          p_reference_id: string | null;
+          p_category: string;
+          p_severity: string;
+          p_priority_score: number;
+          p_title: string;
+          p_message: string;
+          p_action_label?: string | null;
+          p_action_route?: string | null;
+          p_action_context?: Json;
+          p_dedupe_key?: string | null;
+          p_group_key?: string | null;
+          p_source_event_id?: string | null;
+          p_impact_value?: number | null;
+          p_impact_amount?: number | null;
+        };
+        Returns: { out_priority_id: string; out_status: string; out_is_new: boolean }[];
+      };
+      auto_resolve_stale_priorities: {
+        Args: { p_hotel_id: string; p_rule_id: string; p_active_dedupe_keys: string[] };
+        Returns: { out_priority_id: string }[];
       };
     };
     Enums: Record<string, never>;
