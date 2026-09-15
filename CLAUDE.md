@@ -201,6 +201,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0032_room_upgrade_assignment.sql` | `assign_room_for_checkin()` — asignación con upgrade (cobra la diferencia de tarifa) para el flujo guiado de check-in |
 | `0033_inventory_blocks_physical_extension.sql` | Extensión aditiva de `inventory_blocks`: `room_id`, `reason`, `created_by` + catálogo de `block_type` ampliado (preparación para Rack, ver sección de Reservaciones) |
 | `0034_hotel_policies_iva.sql` | `hotel_policies.iva_porcentaje` — IVA configurable por hotel, solo para desglose contable (ver sección de Configuración) |
+| `0035_no_show_hotel_timezone.sql` | Fix: `mark_no_show()` usaba `current_date` (timezone de la sesión) en vez de `hotels.timezone` (ver sección de Fecha operativa) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -971,13 +972,21 @@ timezones distintos, o el mismo hotel cerca de medianoche, verían un "hoy"
 equivocado.
 
 `getHotelBusinessDate(hotelId)` (`src/lib/getHotelBusinessDate.ts`, cálculo
-puro en `src/lib/businessDate.ts`) es esa fuente única: lee `hotels.timezone`
-(columna IANA que ya existía desde `0002_hotels.sql`, sin usarse hasta este
-cambio — no hizo falta migración nueva) y devuelve la fecha calendario de
-ese hotel en ese instante. La usan Rack (`getRackGrid()`) y Reservaciones
-(validación de fechas pasadas); Recepción no tenía ningún cálculo de "hoy"
-en TypeScript que corregir (`mark_no_show()` sí usa `current_date` en SQL —
-ver riesgo documentado, fuera de alcance de este cambio).
+puro en `src/lib/businessDate.ts`) es esa fuente única en TypeScript: lee
+`hotels.timezone` (columna IANA que ya existía desde `0002_hotels.sql`, sin
+usarse hasta este cambio — no hizo falta migración nueva) y devuelve la
+fecha calendario de ese hotel en ese instante. La usan Rack
+(`getRackGrid()`) y Reservaciones (validación de fechas pasadas).
+
+Esta misma regla aplica dentro de Postgres: ninguna función SQL debe usar
+`current_date`/`current_timestamp` (dependen del timezone de la *sesión* de
+la base de datos, no del hotel) como sustituto de "hoy" para una decisión
+operativa. La forma correcta dentro de una función es
+`(now() AT TIME ZONE v_hotel_timezone)::date`, leyendo `v_hotel_timezone`
+de `hotels.timezone` para el `hotel_id` de la fila en cuestión — ver
+`mark_no_show()` (`0026`, corregida en `0035_no_show_hotel_timezone.sql`)
+como el patrón a seguir. TypeScript y Postgres tienen implementaciones
+técnicas distintas pero deben producir siempre el mismo resultado.
 
 Los timestamps técnicos (`created_at`, `updated_at`, `resolved_at`,
 expiración de Holds, `timeline_events`, etc.) siguen en UTC normal — esto
