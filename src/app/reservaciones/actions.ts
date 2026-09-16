@@ -5,8 +5,8 @@ import { createQuote } from "@/modules/reservaciones/actions/quote";
 import { createHoldFromQuoteOption, releaseHold } from "@/modules/reservaciones/actions/hold";
 import { confirmReservation, cancelReservation } from "@/modules/reservaciones/actions/confirm";
 import { registerPayment } from "@/modules/reservaciones/actions/payment";
-
-const IVA = 0.16;
+import { getHotelIvaPorcentaje } from "@/modules/reservaciones/queries/policies";
+import { calculateTaxBreakdown } from "@/lib/tax";
 
 export async function submitSearchAndQuote(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
@@ -17,9 +17,13 @@ export async function submitSearchAndQuote(formData: FormData) {
     1,
     Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24)),
   );
-  const subtotal = Math.round(nightlyRate * nights * 100) / 100;
-  const taxes = Math.round(subtotal * IVA * 100) / 100;
-  const total = Math.round((subtotal + taxes) * 100) / 100;
+
+  // nightlyRate ya es el precio final por noche, IVA incluido -- el monto
+  // que el staff captura NUNCA se le suma impuesto encima (ver CLAUDE.md,
+  // sección IVA/0034). subtotal/taxes se DERIVAN de total, nunca al revés.
+  const total = Math.round(nightlyRate * nights * 100) / 100;
+  const ivaPorcentaje = await getHotelIvaPorcentaje(hotelId);
+  const { subtotal, montoIva: taxes } = calculateTaxBreakdown(total, ivaPorcentaje);
 
   const { quoteOptionId } = await createQuote({
     hotelId,
