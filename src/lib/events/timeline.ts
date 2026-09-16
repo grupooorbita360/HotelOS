@@ -19,7 +19,8 @@ export type TimelineModule =
   | "front_desk"
   | "housekeeping"
   | "billing"
-  | "priorities";
+  | "priorities"
+  | "platform";
 
 export interface LogTimelineEventInput {
   hotelId: string;

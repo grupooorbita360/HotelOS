@@ -3,11 +3,16 @@ import type { ReactNode } from "react";
 import { signOut } from "@/app/login/actions";
 import { brandStyleVars } from "@/lib/color";
 
+/**
+ * Módulos del menú y la feature de plataforma que los enciende/apaga
+ * (catálogo plan_features, ver migración 0039). El menú nunca muestra un
+ * módulo que el plan del hotel no incluye.
+ */
 const MODULES = [
-  { key: "reservaciones", label: "Reservaciones", href: "/reservaciones", icon: "📅" },
-  { key: "recepcion", label: "Recepción", href: "/recepcion", icon: "🛎️" },
-  { key: "rack", label: "Rack", href: "/rack", icon: "🗓️" },
-  { key: "configuracion", label: "Configuración", href: "/configuracion", icon: "⚙️" },
+  { key: "reservaciones", label: "Reservaciones", href: "/reservaciones", icon: "📅", feature: "module.reservaciones" },
+  { key: "recepcion", label: "Recepción", href: "/recepcion", icon: "🛎️", feature: "module.recepcion" },
+  { key: "rack", label: "Rack", href: "/rack", icon: "🗓️", feature: "module.rack" },
+  { key: "configuracion", label: "Configuración", href: "/configuracion", icon: "⚙️", feature: "module.configuracion" },
 ] as const;
 
 /**
@@ -23,6 +28,7 @@ export function AppShell({
   resetHref,
   brandColor,
   maxWidthClassName = "max-w-5xl",
+  features,
   children,
 }: {
   hotelName: string;
@@ -31,8 +37,15 @@ export function AppShell({
   resetHref: string;
   brandColor?: string | null;
   maxWidthClassName?: string;
+  /** Features habilitadas para el hotel (hotel_enabled_features). Si no se
+   *  pasa, se muestran todos los módulos (comportamiento anterior). */
+  features?: string[];
   children: ReactNode;
 }) {
+  const visibleModules = features
+    ? MODULES.filter((m) => features.includes(m.feature))
+    : MODULES;
+
   return (
     <div className="min-h-screen bg-background" style={brandStyleVars(brandColor)}>
       <aside className="fixed inset-y-0 left-0 z-10 flex w-60 flex-col justify-between overflow-y-auto bg-gradient-to-b from-brand to-brand-dark px-4 py-6 text-white">
@@ -43,7 +56,7 @@ export function AppShell({
           <p className="px-2 text-xs text-white/70">Rol: {roleName ?? "—"}</p>
 
           <nav className="mt-8 space-y-1">
-            {MODULES.map((m) => (
+            {visibleModules.map((m) => (
               <Link
                 key={m.key}
                 href={m.href}
