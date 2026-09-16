@@ -278,16 +278,10 @@ export interface Database {
           updated_by: string | null;
         };
         Insert: never;
-        Update: {
-          status?: string;
-          assigned_to?: string | null;
-          due_at?: string | null;
-          acknowledged_at?: string | null;
-          resolved_at?: string | null;
-          resolved_by?: string | null;
-          auto_resolved?: boolean;
-          resolution_reason?: string | null;
-        };
+        // Sin UPDATE de cliente desde 0037: las transiciones humanas sólo
+        // existen como funciones SECURITY DEFINER dedicadas (ver
+        // acknowledge_hotel_priority/assign_hotel_priority/etc. abajo).
+        Update: never;
         Relationships: [
           {
             foreignKeyName: "hotel_priorities_rule_id_fkey";
@@ -1038,15 +1032,14 @@ export interface Database {
         Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
       };
       upsert_hotel_priority: {
+        // p_severity/p_category/p_priority_score/p_source_module se
+        // retiraron en 0037: ahora se derivan siempre de hotel_rules,
+        // nunca del caller (ver AJUSTE 02.1 en CLAUDE.md).
         Args: {
           p_hotel_id: string;
           p_rule_id: string;
-          p_source_module: string;
           p_reference_type: string;
           p_reference_id: string | null;
-          p_category: string;
-          p_severity: string;
-          p_priority_score: number;
           p_title: string;
           p_message: string;
           p_action_label?: string | null;
@@ -1063,6 +1056,29 @@ export interface Database {
       auto_resolve_stale_priorities: {
         Args: { p_hotel_id: string; p_rule_id: string; p_active_dedupe_keys: string[] };
         Returns: { out_priority_id: string }[];
+      };
+      // Transiciones humanas (0037): único camino de UPDATE en
+      // hotel_priorities -- la tabla ya no tiene política de UPDATE para
+      // el cliente.
+      acknowledge_hotel_priority: {
+        Args: { p_priority_id: string };
+        Returns: Database["public"]["Tables"]["hotel_priorities"]["Row"];
+      };
+      assign_hotel_priority: {
+        Args: { p_priority_id: string; p_assignee_user_id: string };
+        Returns: Database["public"]["Tables"]["hotel_priorities"]["Row"];
+      };
+      start_hotel_priority_progress: {
+        Args: { p_priority_id: string };
+        Returns: Database["public"]["Tables"]["hotel_priorities"]["Row"];
+      };
+      resolve_hotel_priority: {
+        Args: { p_priority_id: string; p_reason?: string | null };
+        Returns: Database["public"]["Tables"]["hotel_priorities"]["Row"];
+      };
+      dismiss_hotel_priority: {
+        Args: { p_priority_id: string; p_reason: string };
+        Returns: Database["public"]["Tables"]["hotel_priorities"]["Row"];
       };
     };
     Enums: Record<string, never>;

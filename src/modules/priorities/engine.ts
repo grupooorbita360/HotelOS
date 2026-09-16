@@ -2,7 +2,6 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
 import { logTimelineEvent } from "@/lib/events/timeline";
-import { computePriorityScore } from "./scoring";
 import { arrivalNotRegisteredEvaluator } from "./evaluators/arrivalNotRegistered";
 import type { RuleEvaluator } from "./types";
 
@@ -37,7 +36,7 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
 
   const { data: rules, error: rulesError } = await supabase
     .from("hotel_rules")
-    .select("id, code, module, category, severity, priority_weight")
+    .select("id, code")
     .is("hotel_id", null)
     .eq("is_active", true);
   if (rulesError) throw rulesError;
@@ -58,12 +57,8 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
       const { data: result, error } = await supabase.rpc("upsert_hotel_priority", {
         p_hotel_id: hotelId,
         p_rule_id: rule.id,
-        p_source_module: rule.module,
         p_reference_type: occ.referenceType,
         p_reference_id: occ.referenceId,
-        p_category: rule.category,
-        p_severity: rule.severity,
-        p_priority_score: computePriorityScore(rule.severity, rule.priority_weight),
         p_title: occ.title,
         p_message: occ.message,
         p_action_label: occ.actionLabel ?? null,

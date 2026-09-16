@@ -203,6 +203,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0034_hotel_policies_iva.sql` | `hotel_policies.iva_porcentaje` — IVA configurable por hotel, solo para desglose contable (ver sección de Configuración) |
 | `0035_no_show_hotel_timezone.sql` | Fix: `mark_no_show()` usaba `current_date` (timezone de la sesión) en vez de `hotels.timezone` (ver sección de Fecha operativa) |
 | `0036_priority_engine.sql` | `hotel_rules`, `hotel_priorities`, permiso `priorities.manage`, funciones `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` y la regla `ARRIVAL_NOT_REGISTERED` (ver sección de Motor de reglas y Prioridades) |
+| `0037_priority_engine_hardening.sql` | Endurecimiento del Motor V1: `upsert_hotel_priority()` ya no acepta severity/category/priority_score/source_module del caller; retira la política de `UPDATE` de `hotel_priorities`; agrega 5 funciones `SECURITY DEFINER` para las transiciones humanas (ver "Ajuste 02.1" en Motor de reglas y Prioridades) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -1153,6 +1154,85 @@ Dashboard "Mi Hotel Hoy", Radar 360, editor de reglas, notificaciones
 (push/email/WhatsApp), cron/workers/colas, resolución de
 regla-global-más-override, algoritmo de `group_key`, enforcement de
 `cooldown_minutes` (la columna existe; el motor v1 no la aplica todavía).
+
+### Ajuste 02.1: endurecimiento y cierre del Motor V1 (0037)
+
+La v1 (0036) ya tenía RLS + `has_permission()` + `requirePermission()`,
+pero dos fronteras quedaron más abiertas de lo necesario: cualquier
+miembro autenticado del hotel podía invocar `upsert_hotel_priority()`/
+`auto_resolve_stale_priorities()` por REST y controlar campos que
+conceptualmente son del motor, no del caller; y la política de `UPDATE`
+de `hotel_priorities` permitía, a quien tuviera `priorities.manage`,
+modificar *cualquier* columna (no sólo las de una transición humana
+legítima). `0037_priority_engine_hardening.sql` cierra ambas sin agregar
+infraestructura nueva (sin workers/colas/cron/service_role):
+
+1. **`upsert_hotel_priority()` ya no acepta `severity`/`category`/
+   `priority_score`/`source_module` como parámetros** (se quitaron de la
+   firma, no sólo se ignoran) -- siempre se derivan de `hotel_rules` a
+   partir de `rule_id`, que ahora se valida que exista, aplique al hotel
+   (global o de ese hotel) y esté activo. El cálculo de `priority_score`
+   (`severity_weight + rule.priority_weight`) que antes vivía en
+   `src/modules/priorities/scoring.ts` (TypeScript) se movió por completo
+   a la función SQL -- tener el mismo cálculo en dos lenguajes sólo servía
+   para que el del cliente fuera el que un caller malicioso podía
+   ignorar; `scoring.ts` se borró (dead code una vez que dejó de tener
+   caller). `dedupe_key` se valida contra el prefijo `"<rule.code>:"` y
+   `source_event_id`, si viene, contra que el evento pertenezca al mismo
+   hotel. `title`/`message`/`reference_type`/`reference_id`/`action_*`/
+   `impact_*` siguen siendo del caller porque son contenido dinámico que
+   sólo el evaluador de TypeScript conoce (nombre del huésped, fechas...)
+   -- no hay forma de derivarlos en SQL sin reintroducir lógica de regla
+   ahí, exactamente lo que la arquitectura de evaluadores prohíbe. Este
+   residual (un miembro del propio hotel podría, llamando el RPC directo,
+   crear una prioridad con un título/mensaje inventado pero con
+   severity/score/categoría siempre honestos, dentro de su propio hotel)
+   queda documentado como riesgo aceptado, no como pendiente.
+2. **`hotel_priorities` ya no tiene política de `UPDATE` para el
+   cliente** -- mismo patrón que la ausencia de política de `INSERT` que
+   ya tenía desde 0036. Las 5 transiciones humanas (`acknowledge`,
+   `assign`, `start_progress`, `resolve`, `dismiss`) son ahora funciones
+   `SECURITY DEFINER` dedicadas (`acknowledge_hotel_priority()` etc.),
+   mismo patrón que `check_in()`/`assign_room()`/`mark_no_show()` (0026):
+   cada una revalida `has_permission(hotel_id, 'priorities.manage')`
+   *adentro*, deriva `hotel_id` de la fila (no de un parámetro que el
+   caller pudiera desalinear), exige que el estado actual esté en el
+   conjunto de origen válido para esa transición (si no, `INVALID_
+   TRANSITION`) y sólo escribe las columnas de esa transición. Server
+   Actions (`lifecycle.ts`) siguen llamando `requirePermission()` primero
+   (capa de UX) pero ya no hacen el `.update()`: invocan el RPC
+   correspondiente. Esto es lo que de verdad impide `RESOLVED`/
+   `DISMISSED` -> estado activo (no hay reapertura en v1, por diseño) y lo
+   que hace que descartar sin motivo sea imposible aunque alguien se
+   salte `lifecycle.ts` (`dismiss_hotel_priority()` rechaza motivo vacío
+   con `DISMISS_REASON_REQUIRED`, no sólo el `if (!reason.trim())` de
+   TypeScript).
+3. **`assign_hotel_priority()` valida que el usuario asignado tenga una
+   fila activa en `user_hotel_roles` para el mismo hotel de la
+   prioridad** -- antes nada impedía asignar a alguien de otro hotel
+   salvo la UI.
+4. `auto_resolve_stale_priorities()` ganó la misma validación de
+   `rule_id` (existe y aplica al hotel) por consistencia con
+   `upsert_hotel_priority()`, aunque su firma no cambió. Queda como
+   riesgo aceptado (no resuelto en este ajuste, no pedido) que un
+   miembro del propio hotel podría llamarla directo con una lista vacía
+   de `dedupe_keys` vigentes y auto-resolver de golpe todas las
+   prioridades activas de una regla en su propio hotel -- es
+   autolesión dentro del propio tenant, no una fuga entre hoteles ni una
+   escalación de privilegio, y arreglarlo de raíz requeriría que Postgres
+   pudiera re-ejecutar el evaluador de TypeScript (imposible sin romper
+   la separación catálogo/evaluador de esta arquitectura).
+
+**Por qué no se usó `service_role`**: el motor (`evaluateHotelRules()`)
+sigue corriendo con el cliente normal (`createClient()`, sesión del
+usuario) -- llama los mismos RPCs `SECURITY DEFINER` que un caller
+directo por REST podría llamar, porque no existe en esta arquitectura una
+identidad "sistema" distinta de "usuario autenticado" sin agregar
+infraestructura nueva (cola, worker, secreto compartido) que esta tarea
+pidió explícitamente no construir. La mitigación por eso no es "impedir
+la llamada directa" (no es posible sin esa infraestructura) sino "reducir
+al mínimo necesario lo que esa llamada puede fabricar", exactamente lo
+que hace el punto 1.
 
 ## Convenciones de nombres
 
