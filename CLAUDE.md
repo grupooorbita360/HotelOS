@@ -158,7 +158,7 @@ DATOS → ESTADO OPERATIVO (derivado) → REGLAS → PRIORIDAD
   datos), nunca con contadores mantenidos a mano en otra tabla.
 
 `timeline_events` existe desde esta primera versión precisamente para que
-ingún módulo futuro la trate como "algo que se agrega después".
+ningún módulo futuro la trate como "algo que se agrega después".
 
 ## Esquema de base de datos (resumen)
 
