@@ -158,7 +158,7 @@ DATOS → ESTADO OPERATIVO (derivado) → REGLAS → PRIORIDAD
   datos), nunca con contadores mantenidos a mano en otra tabla.
 
 `timeline_events` existe desde esta primera versión precisamente para que
-ningún módulo futuro la trate como "algo que se agrega después".
+ingún módulo futuro la trate como "algo que se agrega después".
 
 ## Esquema de base de datos (resumen)
 
@@ -204,6 +204,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0035_no_show_hotel_timezone.sql` | Fix: `mark_no_show()` usaba `current_date` (timezone de la sesión) en vez de `hotels.timezone` (ver sección de Fecha operativa) |
 | `0036_priority_engine.sql` | `hotel_rules`, `hotel_priorities`, permiso `priorities.manage`, funciones `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` y la regla `ARRIVAL_NOT_REGISTERED` (ver sección de Motor de reglas y Prioridades) |
 | `0037_priority_engine_hardening.sql` | Endurecimiento del Motor V1: `upsert_hotel_priority()` ya no acepta severity/category/priority_score/source_module del caller; retira la política de `UPDATE` de `hotel_priorities`; agrega 5 funciones `SECURITY DEFINER` para las transiciones humanas (ver "Ajuste 02.1" en Motor de reglas y Prioridades) |
+| `0038_priority_engine_service_role_only.sql` | Restricción de `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` a `service_role` (el motor corre por cron/triggers, no desde el cliente) |
+| `0039_platform_licenses.sql` | Licencias y features de plataforma: `hotel_licenses`, `plan_features`, `hotel_feature_overrides`, funciones `has_feature()`/`hotel_enabled_features()`/`hotel_limit_usage()`/`user_has_suspended_membership()` y suspensión por desactivación de membresías (ver sección de Plataforma) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -548,7 +550,7 @@ garantice como en `timeline_events`). Corregido en
 `0028_fix_stay_transactions_created_by.sql`. Lección: cualquier tabla
 append-only sin `updated_at`/`updated_by` que se escriba solo desde una
 función `SECURITY DEFINER` necesita que **esa función** fije `created_by`
-explícitamente — no hay trigger genérico ni RLS que lo haga por ti.
+explicitamente — no hay trigger genérico ni RLS que lo haga por ti.
 
 ### Alcance de esta sesión (fuera de alcance a propósito)
 
@@ -649,7 +651,7 @@ esquema, y `reception_settings` seguiría siendo, por diseño, propiedad de
 Recepción (Módulo 03 ya documentó por qué existe separada).
 
 Decisión: **unificación sólo en la UI**, nunca en el esquema. La pantalla
-"Políticas del hotel" de Configuración es dos `Card` una junto a otra, cada
+"Políticas del hotel" de Configuración es dos `Card` una junto a la otra, cada
 una escribiendo a su tabla de siempre. Configuración define su propia
 lectura/escritura mínima contra ambas tablas
 (`modules/configuracion/queries|actions/policies.ts`) en vez de importar
@@ -964,6 +966,51 @@ anterior, vale la pena confirmarlo contra la API real antes de asumir que ya
 existe. Es la misma lección de la regla 9, aplicada aquí a "columna
 faltante" en vez de "función mal marcada".
 
+## Plataforma: licencias y features (Fase 0)
+
+Decisiones de modelo comercial multi-tenant:
+
+- `hotels.plan` / `hotels.status` siguen siendo la fuente comercial de
+  verdad (existentes desde `0002`). No se duplican.
+- `hotel_licenses` (1:1 con `hotels`) guarda sólo límites y fechas:
+  `rooms_max` / `users_max` (`NULL` = ilimitado), `starts_at`, `expires_at`
+  (`NULL` = sin vencimiento). Hoteles existentes se migran con límites
+  `NULL` (grandfathered) para no romper el piloto.
+- `plan_features` es el catálogo plan → feature (`PK (feature_key, plan)`).
+  Los módulos actuales (`module.reservaciones`, `module.recepcion`,
+  `module.rack`, `module.configuracion`, `module.mi_hotel_hoy`) están
+  activos en TODOS los planes al lanzar; los futuros (caja, housekeeping,
+  tarifas, CRM, mantenimiento, radar_360) diferencian planes. El piloto
+  es `basico` y debe seguir funcionando igual.
+- `hotel_feature_overrides` (gana sobre `plan_features`) permite a
+  plataforma habilitar/deshabilitar una feature puntual para un hotel
+  (ej. dar Caja a un hotel Básico por cortesía). Es la ÚNICA tabla del
+  proyecto con política de `DELETE` (el override es config derivada, no
+  dato de negocio).
+- `has_feature(hotel_id, key)`: override gana, luego plan, default false.
+  `hotel_enabled_features(hotel_id)`: plan activas ∪ override-activas
+  excepto override-desactivadas. Se consumen desde
+  `src/lib/auth/platform.ts` (`getHotelFeatures`, `assertRoomLimit`,
+  `assertUserLimit`) — nunca en el cliente.
+- Límites: se aplican en los puntos de alta (crear habitación, alta de
+  personal) vía `hotel_limit_usage()`, lanzando error legible con nombre
+  del plan. Defaults: Básico 16 cuartos/6 usuarios, Plus 40/15, Pro ∞.
+- Suspensión: `updateHotelLicense` con `status = suspended|canceled`
+  desactiva las filas de `user_hotel_roles` marcándolas
+  `deactivated_by_suspension = true`. Como `user_hotel_ids()` sólo ve
+  membresías activas, TODA la RLS existente niega acceso automáticamente
+  sin tocar ninguna política. Reactivar (trial/active) restaura sólo las
+  filas marcadas. `user_has_suspended_membership()` permite distinguir en
+  login entre "sin hotel" y "hotel suspendido" → redirect a `/suspendido`.
+- El gating de features en UI es UX, no seguridad: las Server Actions
+  siguen verificando permisos con `requirePermission()`. AppShell recibe
+  `features?: string[]` para ocultar módulos del nav.
+- `/admin` es sólo para `profiles.is_platform_admin` (verificado con
+  `is_platform_admin()` en server, no confiar del cliente). Alta de hotel:
+  crea hotel + licencia con defaults del plan + invita al dueño por email
+  (`auth.admin.inviteUserByEmail` — excepción documentada al veto de
+  `admin.ts`) + rol `hotel_admin` global.
+
 ## Fecha operativa del hotel (businessDate)
 
 La fecha operativa de un hotel nunca debe calcularse directamente desde UTC
@@ -1050,8 +1097,8 @@ una futura UI de asignación), nunca control de acceso.
 
 La tarea prohibió explícitamente guardar una condición ejecutable en el
 catálogo. `hotel_rules.supports_auto_resolution` sólo declara si se espera
-que el evaluador de esa regla pueda auto-resolver — la lógica real de "ya
-no aplica" vive en el evaluador y en `auto_resolve_stale_priorities()`
+que el evaluador de esa regla pueda auto-resolver — la lógica real de "ya no
+aplica" vive en el evaluador y en `auto_resolve_stale_priorities()`
 (ver abajo), nunca en una columna.
 
 ### Deduplicación: un índice único parcial, no una comparación en código
