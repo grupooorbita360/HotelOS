@@ -550,7 +550,7 @@ garantice como en `timeline_events`). Corregido en
 `0028_fix_stay_transactions_created_by.sql`. Lección: cualquier tabla
 append-only sin `updated_at`/`updated_by` que se escriba solo desde una
 función `SECURITY DEFINER` necesita que **esa función** fije `created_by`
-explicitamente — no hay trigger genérico ni RLS que lo haga por ti.
+explícitamente — no hay trigger genérico ni RLS que lo haga por ti.
 
 ### Alcance de esta sesión (fuera de alcance a propósito)
 
@@ -651,7 +651,7 @@ esquema, y `reception_settings` seguiría siendo, por diseño, propiedad de
 Recepción (Módulo 03 ya documentó por qué existe separada).
 
 Decisión: **unificación sólo en la UI**, nunca en el esquema. La pantalla
-"Políticas del hotel" de Configuración es dos `Card` una junto a la otra, cada
+"Políticas del hotel" de Configuración es dos `Card` una junto a otra, cada
 una escribiendo a su tabla de siempre. Configuración define su propia
 lectura/escritura mínima contra ambas tablas
 (`modules/configuracion/queries|actions/policies.ts`) en vez de importar
@@ -1097,8 +1097,8 @@ una futura UI de asignación), nunca control de acceso.
 
 La tarea prohibió explícitamente guardar una condición ejecutable en el
 catálogo. `hotel_rules.supports_auto_resolution` sólo declara si se espera
-que el evaluador de esa regla pueda auto-resolver — la lógica real de "ya no
-aplica" vive en el evaluador y en `auto_resolve_stale_priorities()`
+que el evaluador de esa regla pueda auto-resolver — la lógica real de "ya
+no aplica" vive en el evaluador y en `auto_resolve_stale_priorities()`
 (ver abajo), nunca en una columna.
 
 ### Deduplicación: un índice único parcial, no una comparación en código
