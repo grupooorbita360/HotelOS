@@ -1,5 +1,6 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { arrivalNotRegisteredEvaluator } from "./evaluators/arrivalNotRegistered";
@@ -32,6 +33,14 @@ export interface RuleEvaluationSummary {
  */
 export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluationSummary[]> {
   const supabase = await createClient();
+  // upsert_hotel_priority()/auto_resolve_stale_priorities() (0038) sólo
+  // aceptan llamadas de service_role -- son las dos primitivas internas
+  // del motor, nunca una API pública de mutación. El resto de esta
+  // función (catálogo de reglas, evaluadores) sigue con `supabase`
+  // (cliente de sesión), respetando RLS igual que siempre: esto no
+  // cambia quién puede disparar la evaluación, sólo con qué credencial
+  // sale la escritura final.
+  const adminClient = createAdminClient();
   const businessDate = await getHotelBusinessDate(hotelId);
 
   const { data: rules, error: rulesError } = await supabase
@@ -54,7 +63,7 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
     for (const occ of occurrences) {
       activeDedupeKeys.push(occ.dedupeKey);
 
-      const { data: result, error } = await supabase.rpc("upsert_hotel_priority", {
+      const { data: result, error } = await adminClient.rpc("upsert_hotel_priority", {
         p_hotel_id: hotelId,
         p_rule_id: rule.id,
         p_reference_type: occ.referenceType,
@@ -91,7 +100,7 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
       }
     }
 
-    const { data: resolvedRows, error: resolveError } = await supabase.rpc("auto_resolve_stale_priorities", {
+    const { data: resolvedRows, error: resolveError } = await adminClient.rpc("auto_resolve_stale_priorities", {
       p_hotel_id: hotelId,
       p_rule_id: rule.id,
       p_active_dedupe_keys: activeDedupeKeys,
