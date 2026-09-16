@@ -16,6 +16,8 @@ import { Banner } from "@/components/ui/Banner";
 import {
   submitCreateHotel,
   submitUpdateHotelLicense,
+  submitAssignHotelOwner,
+  submitResendOwnerInvite,
   submitSetFeatureOverride,
   submitRemoveFeatureOverride,
 } from "./actions";
@@ -102,10 +104,14 @@ export default async function AdminPage({
         </header>
 
         <nav className="flex gap-2">
-          {[
-            { key: "hoteles", label: "Hoteles" },
-            { key: "features", label: "Funciones por plan" },
-          ].map((t) => (
+          {[{
+            key: "hoteles",
+            label: "Hoteles",
+          },
+          {
+            key: "features",
+            label: "Funciones por plan",
+          }].map((t) => (
             <Link
               key={t.key}
               href={`/admin?tab=${t.key}`}
@@ -152,8 +158,10 @@ export default async function AdminPage({
                 </div>
               </form>
               <p className="text-xs text-muted">
-                Se crea el hotel, su licencia con los límites del plan, y la política inicial. El dueño recibe
-                invitación por correo con el rol hotel_admin. Los límites por defecto: Básico 16 hab / 6 usuarios,
+                Se crea el hotel, su licencia con los límites del plan, y la política inicial. Si el correo del
+                dueño ya tiene cuenta se vincula directo; si no, recibe invitación con el rol hotel_admin. La
+                invitación se envía ANTES de crear el hotel: si falla (p. ej. límite de correos de Supabase)
+                no queda nada a medias y puedes reintentar. Los límites por defecto: Básico 16 hab / 6 usuarios,
                 Plus 40 hab / 15 usuarios, Pro sin límite.
               </p>
             </Card>
@@ -165,6 +173,7 @@ export default async function AdminPage({
                   <thead>
                     <tr className="border-b border-border text-muted-strong">
                       <th className="py-2 pr-3">Hotel</th>
+                      <th className="py-2 pr-3">Dueño</th>
                       <th className="py-2 pr-3">Plan</th>
                       <th className="py-2 pr-3">Estado</th>
                       <th className="py-2 pr-3">Habitaciones</th>
@@ -178,6 +187,18 @@ export default async function AdminPage({
                       return (
                         <tr key={h.id} className="border-b border-border">
                           <td className="py-2 pr-3 font-medium">{h.name}</td>
+                          <td className="py-2 pr-3">
+                            {h.owners.length > 0 ? (
+                              <span>
+                                {h.owners[0].email}
+                                {h.owners.length > 1 && (
+                                  <span className="text-muted"> +{h.owners.length - 1}</span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted">sin dueño</span>
+                            )}
+                          </td>
                           <td className="py-2 pr-3">{planLabel(h.plan)}</td>
                           <td className="py-2 pr-3"><Badge tone={status.tone}>{status.label}</Badge></td>
                           <td className="py-2 pr-3">
@@ -200,10 +221,10 @@ export default async function AdminPage({
 
               <div className="space-y-4 border-t border-border pt-4">
                 {hotels.map((h) => (
+                <div key={h.id} className="rounded-lg bg-background p-3">
                   <form
-                    key={h.id}
                     action={submitUpdateHotelLicense}
-                    className="grid grid-cols-2 items-end gap-3 rounded-lg bg-background p-3 md:grid-cols-6"
+                    className="grid grid-cols-2 items-end gap-3 md:grid-cols-6"
                   >
                     <input type="hidden" name="hotelId" value={h.id} />
                     <Field label={h.name}>
@@ -241,6 +262,32 @@ export default async function AdminPage({
                       la interfaz). Reactivar restaura sólo a quienes la suspensión desactivó.
                     </p>
                   </form>
+
+                  {h.owners.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border pt-3 text-xs">
+                      <span className="text-muted">Dueño:</span>
+                      <span className="font-medium">{h.owners.map((o) => o.email).join(", ")}</span>
+                      <form action={submitResendOwnerInvite} className="ml-auto flex items-center gap-2">
+                        <input type="hidden" name="ownerEmail" value={h.owners[0].email ?? ""} />
+                        <Button type="submit" variant="ghost">Reenviar invitación</Button>
+                      </form>
+                      <span className="text-muted">
+                        Sólo si aún no aceptó la invitación; si ya tiene cuenta, entra con su contraseña.
+                      </span>
+                    </div>
+                  ) : (
+                    <form action={submitAssignHotelOwner} className="mt-3 flex flex-wrap items-center gap-3 border-t border-border pt-3">
+                      <input type="hidden" name="hotelId" value={h.id} />
+                      <span className="text-xs font-medium text-danger">Sin dueño asignado</span>
+                      <TextInput name="ownerEmail" type="email" required placeholder="Correo del dueño" className="!mt-0 w-56" />
+                      <TextInput name="ownerName" placeholder="Nombre (opcional)" className="!mt-0 w-44" />
+                      <Button type="submit" variant="secondary">Asignar dueño</Button>
+                      <span className="text-xs text-muted">
+                        Si el correo ya tiene cuenta se vincula; si no, recibe invitación por correo.
+                      </span>
+                    </form>
+                  )}
+                </div>
                 ))}
               </div>
             </Card>

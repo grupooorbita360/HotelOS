@@ -2,6 +2,11 @@ import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import type { HotelLimitUsage } from "@/lib/auth/platform";
 
+export interface PlatformHotelOwner {
+  email: string | null;
+  name: string | null;
+}
+
 export interface PlatformHotelRow {
   id: string;
   name: string;
@@ -17,6 +22,7 @@ export interface PlatformHotelRow {
     notes: string | null;
   } | null;
   usage: HotelLimitUsage | null;
+  owners: PlatformHotelOwner[];
 }
 
 /**
@@ -32,6 +38,37 @@ export async function listPlatformHotels(): Promise<PlatformHotelRow[]> {
     .select("id, name, slug, plan, status, timezone, created_at, hotel_licenses(rooms_max, users_max, expires_at, notes)")
     .order("created_at", { ascending: true });
   if (error) throw error;
+
+  // Dueños activos (rol hotel_admin) de todos los hoteles en una sola pasada.
+  const ownersByHotel = new Map<string, PlatformHotelOwner[]>();
+  const hotelIds = (hotels ?? []).map((h) => h.id);
+  if (hotelIds.length > 0) {
+    const { data: adminRole } = await supabase
+      .from("roles")
+      .select("id")
+      .eq("name", "hotel_admin")
+      .is("hotel_id", null)
+      .single();
+
+    if (adminRole) {
+      const { data: memberships, error: ownersError } = await supabase
+        .from("user_hotel_roles")
+        .select("hotel_id, profiles(email, full_name)")
+        .eq("role_id", adminRole.id)
+        .eq("is_active", true)
+        .in("hotel_id", hotelIds);
+      if (ownersError) throw ownersError;
+
+      for (const membership of memberships ?? []) {
+        const profile = Array.isArray(membership.profiles)
+          ? membership.profiles[0]
+          : membership.profiles;
+        const list = ownersByHotel.get(membership.hotel_id) ?? [];
+        list.push({ email: profile?.email ?? null, name: profile?.full_name ?? null });
+        ownersByHotel.set(membership.hotel_id, list);
+      }
+    }
+  }
 
   const rows: PlatformHotelRow[] = [];
   for (const hotel of hotels ?? []) {
@@ -54,6 +91,7 @@ export async function listPlatformHotels(): Promise<PlatformHotelRow[]> {
       created_at: hotel.created_at,
       license,
       usage: usage as HotelLimitUsage | null,
+      owners: ownersByHotel.get(hotel.id) ?? [],
     });
   }
 
