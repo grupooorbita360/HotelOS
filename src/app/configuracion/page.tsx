@@ -249,10 +249,18 @@ export default async function ConfiguracionPage({
                         <input type="hidden" name="isClean" value={(!r.is_clean).toString()} />
                         <button className="text-brand underline">{r.is_clean ? "Marcar sucia" : "Marcar limpia"}</button>
                       </form>
-                      <form action={submitSetRoomActive}>
+                      <form action={submitSetRoomActive} className="flex items-center gap-2">
                         <input type="hidden" name="hotelId" value={hotel.hotelId} />
                         <input type="hidden" name="roomId" value={r.id} />
                         <input type="hidden" name="isActive" value={(!r.is_active).toString()} />
+                        {r.is_active && (
+                          <input
+                            name="reason"
+                            placeholder="Motivo (obligatorio)"
+                            required
+                            className="w-40 rounded border border-border px-2 py-1 text-xs"
+                          />
+                        )}
                         <button className="text-danger underline">{r.is_active ? "Desactivar" : "Reactivar"}</button>
                       </form>
                     </div>

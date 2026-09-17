@@ -204,6 +204,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0035_no_show_hotel_timezone.sql` | Fix: `mark_no_show()` usaba `current_date` (timezone de la sesión) en vez de `hotels.timezone` (ver sección de Fecha operativa) |
 | `0036_priority_engine.sql` | `hotel_rules`, `hotel_priorities`, permiso `priorities.manage`, funciones `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` y la regla `ARRIVAL_NOT_REGISTERED` (ver sección de Motor de reglas y Prioridades) |
 | `0037_priority_engine_hardening.sql` | Endurecimiento del Motor V1: `upsert_hotel_priority()` ya no acepta severity/category/priority_score/source_module del caller; retira la política de `UPDATE` de `hotel_priorities`; agrega 5 funciones `SECURITY DEFINER` para las transiciones humanas (ver "Ajuste 02.1" en Motor de reglas y Prioridades) |
+| `0038_priority_engine_service_role_only.sql` | Cierre del Ajuste 02.1: `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` sólo ejecutables por `service_role` (`auth.role() = 'service_role'`, reemplaza el chequeo de pertenencia al hotel); `engine.ts` usa `createAdminClient()` sólo en esas dos llamadas |
+| `0039_habitaciones_domain.sql` | Módulo Habitaciones: capacidad explícita aditiva en `room_types`, desactivación con motivo obligatorio en `rooms`, catálogo de amenidades + herencia con excepción (amenidades y activos), `snapshot_comercial_habitacion`, funciones `deactivate_room()`/`reactivate_room()`/`update_room_type_capacity()` (ImpactAnalysis) y `congelar_configuracion_comercial()` (ver sección Habitaciones) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -964,6 +966,131 @@ anterior, vale la pena confirmarlo contra la API real antes de asumir que ya
 existe. Es la misma lección de la regla 9, aplicada aquí a "columna
 faltante" en vez de "función mal marcada".
 
+## Habitaciones: decisiones de esquema (Módulo 06)
+
+Completa el dominio que Rack, Reservaciones y Recepción ya consumían
+parcialmente vía `room_types`/`rooms` (creados en 0010, extendidos en
+0021/0029). Antes de escribir código se auditó el esquema real (no lo que
+el pedido asumía) — ver `0039_habitaciones_domain.sql`.
+
+### Dos referencias del pedido que no existen en el código real
+
+Verificadas por `grep` contra todo el repo antes de escribir la migración,
+no asumidas:
+
+- **No hay un catálogo normalizado de activos con id propio** ("CAT_
+  ACTIVOS_ENTREGA"). Lo que existe es `hotel_policies.checkin_assets`
+  (jsonb, catálogo de nombres) y `delivered_assets.asset_name` (texto
+  libre contra ese catálogo, sin FK — 0025). `tipo_habitacion_activo` y
+  `habitacion_activo_excepcion` (abajo) siguen exactamente ese mismo
+  patrón — `asset_name text`, sin FK a una tabla que no existe — en vez
+  de inventar un catálogo normalizado nuevo que duplicaría
+  `hotel_policies.checkin_assets` (regla 6).
+- **No existe una tabla genérica "HistorialCambio"** en el proyecto. La
+  auditoría de negocio existente es `timeline_events` (patrón
+  transversal) — se usa esa para reclasificación/desactivación, no se
+  creó una tabla nueva.
+
+### Capacidad explícita: aditivo, no rename
+
+El pedido pedía `base_adults`/`max_adults`/`max_children`/`max_pets` "o
+el nombre que ya tenga esa tabla" asumiendo que Reservaciones ya los
+esperaba. Verificado: Reservaciones (`availability.ts`, `confirm.ts`) hoy
+sólo lee `capacity_adults`/`capacity_children`/`accepts_pets` (0010) —
+esos campos explícitos no existían. Se agregaron como columnas **nuevas**
+(backfilleadas desde las existentes: `max_adults ← capacity_adults`,
+`max_children ← capacity_children`, `max_pets ← accepts_pets ? 1 : 0`),
+sin renombrar ni borrar las viejas — mismo criterio aditivo que
+0029/0033/0034, y consistente con que tocar el modelo de capacidad de
+Reservaciones está fuera de alcance de esta sesión. Reconciliarlas
+(que Reservaciones empiece a leer las nuevas) es evolución futura, igual
+que `base_rate` (0029) estuvo "sin conectar" hasta que esta misma sesión
+lo necesitó de verdad para el fix de IVA.
+
+### Herencia con excepción (3 estados): HEREDA / AGREGA / EXCLUYE
+
+Para amenidades y activos a nivel Habitacion individual. Sin fila en
+`habitacion_amenidad_excepcion`/`habitacion_activo_excepcion` = HEREDA
+(toma la base de `tipo_habitacion_amenidad`/`tipo_habitacion_activo`).
+Con fila `tipo_excepcion = 'AGREGA'` = la habitación tiene algo que su
+tipo no tiene. Con fila `'EXCLUYE'` = la habitación NO tiene algo que su
+tipo sí tiene. La resolución (base + excepciones) vive en TypeScript
+(`resolveRoomAmenities()`/`resolveRoomAssets()`,
+`modules/habitaciones/queries/rooms.ts`), nunca en una vista
+materializada — MVP simple, sin infraestructura nueva.
+
+### SnapshotComercialHabitacion: una vez por reserva, dueño = Habitaciones
+
+`congelar_configuracion_comercial(reservation_id)` (SECURITY DEFINER) es
+el único camino de escritura — mismo patrón que `hotel_priorities`/
+`inventory_blocks` (sin política de INSERT/UPDATE de cliente). Toma la
+primera `reservation_stay` de la reserva (el modelo soporta 1:N pero la
+interfaz de esta sesión sigue limitando a una Estancia, decisión ya
+cerrada de Reservaciones) y congela capacidad + sólo las amenidades con
+`es_promesa_comercial = true`, como JSON compacto. `room_id` es nullable
+a propósito: al confirmarse, `reservation_stays.room_id` nunca se ha
+escrito todavía (ver sección Rack) — se congela lo comercial (tipo), lo
+físico es Recepción. Idempotente vía `on conflict (reservation_id) do
+nothing`, para que un reintento del mismo confirm no duplique.
+
+`modules/reservaciones/actions/confirm.ts` llama a este RPC **directo**
+(`supabase.rpc("congelar_configuracion_comercial", ...)`), nunca
+importando `modules/habitaciones/actions/snapshot.ts` — regla 7 (los
+módulos no se importan entre sí), mismo patrón exacto que Rack llamando
+`assign_room()` por RPC en vez de importar
+`modules/recepcion/actions/lifecycle.ts`. El wrapper de Habitaciones
+(`congelarConfiguracionComercial()`) sigue existiendo como su propio
+punto de entrada, para cuando el propio módulo Habitaciones lo necesite.
+
+### ImpactAnalysis simplificado: SAFE / BLOQUEANTE, sin nivel intermedio
+
+Dos funciones `SECURITY DEFINER`, cada una evaluando la señal real que
+ya existe (no una heurística nueva):
+
+- **`deactivate_room(room_id, reason)`** — BLOQUEANTE si existe una fila
+  activa en `room_assignments` (`released_at is null`) para esa
+  habitación: significa que una Estancia real (actual o futura) depende
+  de esa unidad física concreta. No mira `reservation_stays.room_id`
+  porque nada lo escribe hoy (mismo hallazgo que la sección Rack).
+  Motivo obligatorio, siempre rechazado por Postgres si viene vacío —
+  nunca sólo una validación de TypeScript.
+- **`update_room_type_capacity(room_type_id, ...)`** — BLOQUEANTE si
+  existe una `reservation_stay` de una reserva `confirmed` con
+  `check_out` todavía no pasado (fecha operativa del hotel, nunca
+  `current_date` de sesión — mismo patrón que `mark_no_show()`, 0035)
+  cuya ocupación ya vendida (`adults`/`children`/`has_pets`) no cabría en
+  la capacidad nueva.
+
+El nivel intermedio `REQUIERE_AUTORIZACION` queda fuera de alcance a
+propósito (pedido explícito de esta sesión) — no hay excepción en el MVP,
+un `BLOQUEANTE` siempre rechaza el guardado completo.
+
+### Cambio de comportamiento en Configuración: desactivar ya no es un UPDATE directo
+
+`setRoomActive()` (`modules/configuracion/actions/rooms.ts`) dejó de
+hacer `.update({is_active})` directo: ahora llama a
+`deactivate_room()`/`reactivate_room()` por RPC (mismo patrón de llamada
+directa que arriba, sin importar el Server Action de Habitaciones), y
+exige un motivo para desactivar — se agregó un campo "Motivo (obligatorio)"
+junto al botón "Desactivar" en `/configuracion?tab=habitaciones`. Esto no
+duplica la lógica de ImpactAnalysis (vive una sola vez en el RPC); es la
+misma duplicación mínima ya aceptada en este proyecto para no importar
+entre módulos (ej. `hotel_policies`/`reception_settings` en Configuración
+vs. Recepción).
+
+### Fuera de alcance a propósito (esta etapa)
+
+Sistema de Media con URLs firmadas y contexto (COMERCIAL/DAÑO/
+MANTENIMIENTO) — por ahora `photos text[]` simple en `room_types`/
+`rooms`; catálogos cerrados de Zona/Edificio; relaciones CONNECTING/
+ADJOINING/NEARBY entre habitaciones; `catalog_health_score`; alta masiva
+de habitaciones; suministros/inventario; nivel `REQUIERE_AUTORIZACION`
+del ImpactAnalysis; reconciliar `capacity_adults`/`capacity_children`/
+`accepts_pets` (Reservaciones) con `max_adults`/`max_children`/
+`max_pets` (Habitaciones, nuevos). Ningún módulo de negocio nuevo
+(Rack/Recepción/Reservaciones) se tocó salvo el punto de integración
+explícito de `confirm.ts`.
+
 ## Fecha operativa del hotel (businessDate)
 
 La fecha operativa de un hotel nunca debe calcularse directamente desde UTC
@@ -1294,7 +1421,10 @@ src/
       evaluators/             arrivalNotRegistered.ts — un evaluador de TS por rule.code, registrado a mano en engine.ts.
       queries/             priorities.ts — listHotelPriorities(), getHotelPriority().
       actions/             lifecycle.ts — acknowledge/assign/startProgress/resolve/dismiss, todas requirePermission('priorities.manage').
-    habitaciones/ caja/  (carpetas listas, sin lógica todavía)
+    habitaciones/
+      queries/             roomTypes.ts, rooms.ts — catálogo, amenidades/activos base, resolveRoomAmenities()/resolveRoomAssets() (herencia con excepción).
+      actions/             roomTypes.ts (capacidad vía RPC con ImpactAnalysis, catálogo de amenidades), rooms.ts (deactivate/reactivate vía RPC, excepciones), snapshot.ts (congelarConfiguracionComercial(), propio punto de entrada -- Reservaciones llama al RPC directo, no este archivo).
+    caja/  (carpeta lista, sin lógica todavía)
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.
   types/

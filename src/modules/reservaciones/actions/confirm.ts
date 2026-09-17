@@ -41,6 +41,18 @@ export async function confirmReservation(input: ConfirmReservationInput) {
   });
   if (error) throw error;
 
+  // Habitaciones sigue siendo dueño de QUÉ se congela (capacidad +
+  // amenidades es_promesa_comercial) -- Reservaciones sólo dispara el
+  // momento, una vez por reserva, nunca por noche (ver CLAUDE.md, Módulo
+  // 06 Habitaciones). Se llama al RPC directo, nunca importando el
+  // Server Action de Habitaciones (regla 7: los módulos no se importan
+  // entre sí -- mismo patrón que Rack llamando assign_room() por RPC en
+  // vez de importar modules/recepcion/actions/lifecycle.ts).
+  const { error: snapshotError } = await supabase.rpc("congelar_configuracion_comercial", {
+    p_reservation_id: reservation.id,
+  });
+  if (snapshotError) throw snapshotError;
+
   await logTimelineEvent({
     hotelId: input.hotelId,
     module: "reservations",

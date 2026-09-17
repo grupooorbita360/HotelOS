@@ -298,10 +298,17 @@ export interface Database {
           hotel_id: string;
           name: string;
           code: string;
+          description: string | null;
           capacity_adults: number;
           capacity_children: number;
           accepts_pets: boolean;
+          base_adults: number;
+          max_adults: number;
+          max_children: number;
+          max_pets: number;
           base_rate: number;
+          orden_comercial: number;
+          photos: string[];
           is_active: boolean;
           created_at: string;
           created_by: string | null;
@@ -313,13 +320,23 @@ export interface Database {
           hotel_id: string;
           name: string;
           code: string;
+          description?: string | null;
           capacity_adults?: number;
           capacity_children?: number;
           accepts_pets?: boolean;
+          base_adults?: number;
+          max_adults?: number;
+          max_children?: number;
+          max_pets?: number;
           base_rate?: number;
+          orden_comercial?: number;
+          photos?: string[];
           is_active?: boolean;
         };
-        Update: Partial<Database["public"]["Tables"]["room_types"]["Insert"]>;
+        // base_adults/max_adults/max_children/max_pets NO se editan por
+        // UPDATE directo -- sólo vía update_room_type_capacity() (0039,
+        // ImpactAnalysis). El resto de campos sí acepta UPDATE normal.
+        Update: Partial<Omit<Database["public"]["Tables"]["room_types"]["Insert"], "base_adults" | "max_adults" | "max_children" | "max_pets">>;
         Relationships: [];
       };
       rooms: {
@@ -329,9 +346,14 @@ export interface Database {
           room_type_id: string;
           code: string;
           building: string | null;
+          floor: string | null;
           bed_type: string | null;
+          photos: string[];
           is_active: boolean;
           is_clean: boolean;
+          motivo_inactivacion: string | null;
+          inactive_at: string | null;
+          inactive_by: string | null;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -343,11 +365,16 @@ export interface Database {
           room_type_id: string;
           code: string;
           building?: string | null;
+          floor?: string | null;
           bed_type?: string | null;
+          photos?: string[];
           is_active?: boolean;
           is_clean?: boolean;
         };
-        Update: Partial<Database["public"]["Tables"]["rooms"]["Insert"]>;
+        // is_active/motivo_inactivacion/inactive_at/inactive_by NO se editan
+        // por UPDATE directo -- sólo vía deactivate_room()/reactivate_room()
+        // (0039, ImpactAnalysis + motivo obligatorio).
+        Update: Partial<Omit<Database["public"]["Tables"]["rooms"]["Insert"], "is_active">>;
         Relationships: [
           {
             foreignKeyName: "rooms_room_type_id_fkey";
@@ -357,6 +384,125 @@ export interface Database {
             referencedColumns: ["id"];
           },
         ];
+      };
+      catalogo_amenidades: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          name: string;
+          es_promesa_comercial: boolean;
+          is_active: boolean;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          name: string;
+          es_promesa_comercial?: boolean;
+          is_active?: boolean;
+        };
+        Update: Partial<Database["public"]["Tables"]["catalogo_amenidades"]["Insert"]>;
+        Relationships: [];
+      };
+      tipo_habitacion_amenidad: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_type_id: string;
+          amenidad_id: string;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_type_id: string; amenidad_id: string };
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "tipo_habitacion_amenidad_amenidad_id_fkey";
+            columns: ["amenidad_id"];
+            isOneToOne: false;
+            referencedRelation: "catalogo_amenidades";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      habitacion_amenidad_excepcion: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_id: string;
+          amenidad_id: string;
+          tipo_excepcion: "AGREGA" | "EXCLUYE";
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_id: string; amenidad_id: string; tipo_excepcion: "AGREGA" | "EXCLUYE" };
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "habitacion_amenidad_excepcion_amenidad_id_fkey";
+            columns: ["amenidad_id"];
+            isOneToOne: false;
+            referencedRelation: "catalogo_amenidades";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      tipo_habitacion_activo: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_type_id: string;
+          asset_name: string;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_type_id: string; asset_name: string };
+        Update: never;
+        Relationships: [];
+      };
+      habitacion_activo_excepcion: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_id: string;
+          asset_name: string;
+          tipo_excepcion: "AGREGA" | "EXCLUYE";
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_id: string; asset_name: string; tipo_excepcion: "AGREGA" | "EXCLUYE" };
+        Update: never;
+        Relationships: [];
+      };
+      snapshot_comercial_habitacion: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          reservation_id: string;
+          room_type_id: string;
+          room_id: string | null;
+          base_adults: number;
+          max_adults: number;
+          max_children: number;
+          max_pets: number;
+          amenidades_prometidas: Json;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
       };
       leads: {
         Row: {
@@ -1079,6 +1225,23 @@ export interface Database {
       dismiss_hotel_priority: {
         Args: { p_priority_id: string; p_reason: string };
         Returns: Database["public"]["Tables"]["hotel_priorities"]["Row"];
+      };
+      // Habitaciones (0039).
+      congelar_configuracion_comercial: {
+        Args: { p_reservation_id: string };
+        Returns: Database["public"]["Tables"]["snapshot_comercial_habitacion"]["Row"];
+      };
+      deactivate_room: {
+        Args: { p_room_id: string; p_reason: string };
+        Returns: Database["public"]["Tables"]["rooms"]["Row"];
+      };
+      reactivate_room: {
+        Args: { p_room_id: string };
+        Returns: Database["public"]["Tables"]["rooms"]["Row"];
+      };
+      update_room_type_capacity: {
+        Args: { p_room_type_id: string; p_base_adults: number; p_max_adults: number; p_max_children: number; p_max_pets: number };
+        Returns: Database["public"]["Tables"]["room_types"]["Row"];
       };
     };
     Enums: Record<string, never>;

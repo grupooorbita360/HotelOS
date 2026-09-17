@@ -160,23 +160,34 @@ export async function updateRoom(hotelId: string, roomId: string, input: RoomInp
   return data;
 }
 
-export async function setRoomActive(hotelId: string, roomId: string, isActive: boolean) {
+/**
+ * Desactivar/reactivar ya no es un UPDATE directo de is_active: pasa por
+ * deactivate_room()/reactivate_room() (0039, módulo Habitaciones), que
+ * corren ImpactAnalysis (SAFE/BLOQUEANTE contra asignaciones físicas
+ * activas) y exigen motivo al desactivar. Se llama al RPC directo, nunca
+ * importando el Server Action de Habitaciones (regla 7 -- mismo patrón
+ * que Rack llamando assign_room() por RPC).
+ */
+export async function setRoomActive(hotelId: string, roomId: string, isActive: boolean, reason?: string) {
   await requirePermission(hotelId, "hotel.settings.manage");
   const supabase = await createClient();
 
-  const { error } = await supabase
-    .from("rooms")
-    .update({ is_active: isActive })
-    .eq("id", roomId)
-    .eq("hotel_id", hotelId);
-  if (error) throw error;
+  if (isActive) {
+    const { error } = await supabase.rpc("reactivate_room", { p_room_id: roomId });
+    if (error) throw error;
+  } else {
+    if (!reason?.trim()) throw new Error("Desactivar una habitación requiere un motivo.");
+    const { error } = await supabase.rpc("deactivate_room", { p_room_id: roomId, p_reason: reason });
+    if (error) throw error;
+  }
 
   await logTimelineEvent({
     hotelId,
-    module: "core",
+    module: "rooms",
     eventType: isActive ? "room.reactivated" : "room.deactivated",
     entityType: "room",
     entityId: roomId,
+    payload: isActive ? undefined : { reason: reason as string },
   });
 }
 

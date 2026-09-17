@@ -98,7 +98,8 @@ export async function submitSetRoomActive(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const roomId = String(formData.get("roomId"));
   const isActive = formData.get("isActive") === "true";
-  await runOrError("habitaciones", () => setRoomActive(hotelId, roomId, isActive));
+  const reason = String(formData.get("reason") || "") || undefined;
+  await runOrError("habitaciones", () => setRoomActive(hotelId, roomId, isActive, reason));
 }
 
 export async function submitSetRoomClean(formData: FormData) {
