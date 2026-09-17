@@ -205,7 +205,9 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0036_priority_engine.sql` | `hotel_rules`, `hotel_priorities`, permiso `priorities.manage`, funciones `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` y la regla `ARRIVAL_NOT_REGISTERED` (ver sección de Motor de reglas y Prioridades) |
 | `0037_priority_engine_hardening.sql` | Endurecimiento del Motor V1: `upsert_hotel_priority()` ya no acepta severity/category/priority_score/source_module del caller; retira la política de `UPDATE` de `hotel_priorities`; agrega 5 funciones `SECURITY DEFINER` para las transiciones humanas (ver "Ajuste 02.1" en Motor de reglas y Prioridades) |
 | `0038_priority_engine_service_role_only.sql` | Cierre del Ajuste 02.1: `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` sólo ejecutables por `service_role` (`auth.role() = 'service_role'`, reemplaza el chequeo de pertenencia al hotel); `engine.ts` usa `createAdminClient()` sólo en esas dos llamadas |
-| `0039_habitaciones_domain.sql` | Módulo Habitaciones: capacidad explícita aditiva en `room_types`, desactivación con motivo obligatorio en `rooms`, catálogo de amenidades + herencia con excepción (amenidades y activos), `snapshot_comercial_habitacion`, funciones `deactivate_room()`/`reactivate_room()`/`update_room_type_capacity()` (ImpactAnalysis) y `congelar_configuracion_comercial()` (ver sección Habitaciones) |
+| `0039_platform_licenses.sql` | Fase 0/Plataforma (rama `feature/fase-0-plataforma`, aún no fusionada a esta rama): `hotel_licenses`, `plan_features`, `hotel_feature_overrides`, funciones `has_feature()`/`hotel_enabled_features()`/`hotel_limit_usage()`. No documentado en detalle aquí — es dueño ese trabajo, no éste. |
+| `0040_hotel_functions_membership_guard.sql` | Fase 0/Plataforma (rama `fix/fase0-security-0040`, aún no fusionada a esta rama): `assert_hotel_member()` + guard de pertenencia en las tres funciones de 0039. |
+| `0041_habitaciones_domain.sql` | Módulo Habitaciones: capacidad explícita aditiva en `room_types`, desactivación con motivo obligatorio en `rooms`, catálogo de amenidades + herencia con excepción (amenidades y activos), `snapshot_comercial_habitacion`, funciones `deactivate_room()`/`reactivate_room()`/`update_room_type_capacity()` (ImpactAnalysis) y `congelar_configuracion_comercial()` (ver sección Habitaciones). No depende de 0039/0040 (no toca `room_types`/`rooms`, sin colisión de nombres de tabla/función) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -971,7 +973,7 @@ faltante" en vez de "función mal marcada".
 Completa el dominio que Rack, Reservaciones y Recepción ya consumían
 parcialmente vía `room_types`/`rooms` (creados en 0010, extendidos en
 0021/0029). Antes de escribir código se auditó el esquema real (no lo que
-el pedido asumía) — ver `0039_habitaciones_domain.sql`.
+el pedido asumía) — ver `0041_habitaciones_domain.sql`.
 
 ### Dos referencias del pedido que no existen en el código real
 
