@@ -158,7 +158,7 @@ DATOS → ESTADO OPERATIVO (derivado) → REGLAS → PRIORIDAD
   datos), nunca con contadores mantenidos a mano en otra tabla.
 
 `timeline_events` existe desde esta primera versión precisamente para que
-ningún módulo futuro la trate como "algo que se agrega después".
+ingún módulo futuro la trate como "algo que se agrega después".
 
 ## Esquema de base de datos (resumen)
 
@@ -550,7 +550,7 @@ garantice como en `timeline_events`). Corregido en
 `0028_fix_stay_transactions_created_by.sql`. Lección: cualquier tabla
 append-only sin `updated_at`/`updated_by` que se escriba solo desde una
 función `SECURITY DEFINER` necesita que **esa función** fije `created_by`
-explícitamente — no hay trigger genérico ni RLS que lo haga por ti.
+explicitamente — no hay trigger genérico ni RLS que lo haga por ti.
 
 ### Alcance de esta sesión (fuera de alcance a propósito)
 
@@ -651,7 +651,7 @@ esquema, y `reception_settings` seguiría siendo, por diseño, propiedad de
 Recepción (Módulo 03 ya documentó por qué existe separada).
 
 Decisión: **unificación sólo en la UI**, nunca en el esquema. La pantalla
-"Políticas del hotel" de Configuración es dos `Card` una junto a otra, cada
+"Políticas del hotel" de Configuración es dos `Card` una junto a la otra, cada
 una escribiendo a su tabla de siempre. Configuración define su propia
 lectura/escritura mínima contra ambas tablas
 (`modules/configuracion/queries|actions/policies.ts`) en vez de importar
@@ -869,7 +869,7 @@ explícita. En vez de eso, se listan en su propia sección ("Reservas
 confirmadas sin habitación asignada", con su propio KPI) — coincide con lo
 pedido explícitamente en el alcance del MVP, no es un rodeo.
 
-Esto deja la prioridad "`RESERVED` por habitación" del enunciado original
+Esto deja la prioridad `"RESERVED"` por habitación" del enunciado original
 implementada pero inerte en la práctica hoy: sólo se activaría si
 `reservation_stays.room_id` llegara a escribirse en el futuro (una
 pre-asignación comercial explícita, distinta de la operativa de Recepción).
@@ -1007,9 +1007,15 @@ Decisiones de modelo comercial multi-tenant:
   `features?: string[]` para ocultar módulos del nav.
 - `/admin` es sólo para `profiles.is_platform_admin` (verificado con
   `is_platform_admin()` en server, no confiar del cliente). Alta de hotel:
-  crea hotel + licencia con defaults del plan + invita al dueño por email
-  (`auth.admin.inviteUserByEmail` — excepción documentada al veto de
-  `admin.ts`) + rol `hotel_admin` global.
+  PRIMERO se resuelve al dueño —si el correo ya tiene cuenta se vincula
+  (búsqueda por `profiles.email`, que plataforma puede leer vía RLS, 0006);
+  si no, se invita por email (`auth.admin.inviteUserByEmail` — excepción
+  documentada al veto de `admin.ts`)— y DESPUÉS se crea hotel + licencia
+  con defaults del plan + rol `hotel_admin` global. Si el invite falla
+  (p. ej. rate limit de correos de Supabase) NO queda hotel huérfano y el
+  error dice cómo reintentar. La tabla de /admin muestra el dueño activo
+  de cada hotel y permite asignarlo/reasignarlo y reenviar la invitación
+  (`assignHotelOwner` / `resendOwnerInvite`, PR #6).
 
 ## Fecha operativa del hotel (businessDate)
 
@@ -1371,12 +1377,12 @@ Postgres 16 local (con un stub mínimo del esquema `auth` de Supabase) y se
 probó explícitamente que:
 
 - Un usuario con rol en el Hotel A no puede ver hoteles, ni eventos de
-  timeline, de un Hotel B.
+timeline, de un Hotel B.
 - `has_permission()` devuelve `true`/`false` correctamente según el rol
-  asignado (ej. `front_desk` puede `reservations.create` pero no
-  `hotel.settings.manage`).
+asignado (ej. `front_desk` puede `reservations.create` pero no
+`hotel.settings.manage`).
 - Un intento de insertar un evento de timeline en el hotel de otro usuario,
-  suplantando su propio `actor_user_id`, es bloqueado por RLS.
+suplantando su propio `actor_user_id`, es bloqueado por RLS.
 
 ## Reglas para cualquier sesión futura de Claude Code (o humano)
 
