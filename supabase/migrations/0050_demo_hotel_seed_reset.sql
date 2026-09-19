@@ -46,6 +46,7 @@ security definer
 set search_path = public
 as $$
 declare
+  rec record;
   v_hotel_id uuid;
   v_rate numeric;
   v_total numeric;
@@ -232,8 +233,10 @@ begin
   join public.room_types rt on rt.hotel_id = v_hotel_id and rt.code = s.room_type;
 
   -- ── 6. Ciclo de vida por estancia ────────────────────────────────────
+  -- Nota: rec se declara como record arriba (el FOR no la declara solo en
+  -- todos los contextos; la declaración explícita evita el error 42601).
   for rec in
-    select st.id as stay_id, r.id as reservation_id, r.folio, s.*
+    select st.id as stay_id, r.id as reservation_id, s.*
     from _demo_spec s
     join public.reservations r      on r.hotel_id = v_hotel_id and r.folio = 'HD-' || s.folio::text
     join public.reservation_stays rs on rs.reservation_id = r.id
