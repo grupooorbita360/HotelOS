@@ -34,7 +34,9 @@
 --     EXECUTE sólo para authenticated; revocado a public/anon.
 --
 -- Número 0050 a propósito: deja hueco a 0040 (ya aplicada) y a 0041/0042
--- que pueden existir en producción aunque aún no estén commiteadas.
+-- que existen en producción (con columnas nuevas en room_types:
+-- base_rate, base_adults, max_adults, max_children, max_pets, description,
+-- orden_comercial, photos) aunque aún no estén commiteadas en el repo.
 
 -- ============================================================
 -- reset_demo_hotel()
@@ -112,12 +114,21 @@ begin
           jsonb_build_object('reset_by', auth.uid()));
 
   -- ── 3. Catálogo: 4 tipos, 10 habitaciones ────────────────────────────
-  insert into public.room_types (hotel_id, name, code, capacity_adults, capacity_children, accepts_pets)
+  -- NOTA: incluye las columnas que 0041/0042 agregaron a room_types en
+  -- producción (base_rate, base_adults, max_adults, max_children, max_pets).
+  -- base_rate coincide con las tarifas usadas en el seed.
+  insert into public.room_types (hotel_id, name, code, capacity_adults, capacity_children, accepts_pets,
+                                 base_rate, base_adults, max_adults, max_children, max_pets,
+                                 description, orden_comercial)
   values
-    (v_hotel_id, 'Sencilla',     'SEN', 2, 0, false),
-    (v_hotel_id, 'Doble',        'DBL', 2, 1, true),
-    (v_hotel_id, 'Junior Suite', 'JUN', 3, 2, true),
-    (v_hotel_id, 'Master Suite', 'MAS', 4, 2, false);
+    (v_hotel_id, 'Sencilla',     'SEN', 2, 0, false, 1150, 2, 3, 1, 0,
+     'Cama matrimonial, ventilador y baño privado.', 1),
+    (v_hotel_id, 'Doble',        'DBL', 2, 1, true,  1750, 2, 3, 2, 2,
+     'Dos camas matrimoniales, ideal para familias.', 2),
+    (v_hotel_id, 'Junior Suite', 'JUN', 3, 2, true,  2500, 2, 4, 3, 2,
+     'Sala pequeña, terraza y minibar.', 3),
+    (v_hotel_id, 'Master Suite', 'MAS', 4, 2, false, 3300, 2, 5, 3, 0,
+     'Dos recámaras, jacuzzi y vista al jardín.', 4);
 
   insert into public.rooms (hotel_id, room_type_id, code)
   select v_hotel_id, rt.id, v.code
