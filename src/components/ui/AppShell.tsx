@@ -13,6 +13,7 @@ const MODULES = [
   { key: "recepcion", label: "Recepción", href: "/recepcion", icon: "🛎️", feature: "module.recepcion" },
   { key: "rack", label: "Rack", href: "/rack", icon: "🗓️", feature: "module.rack" },
   { key: "configuracion", label: "Configuración", href: "/configuracion", icon: "⚙️", feature: "module.configuracion" },
+  { key: "caja", label: "Caja", href: "/caja", icon: "💰", feature: "module.caja" },
 ] as const;
 
 /**

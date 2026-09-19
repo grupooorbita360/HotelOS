@@ -7,6 +7,7 @@ import { signOut } from "@/app/login/actions";
 import { listRoomTypes, listRooms } from "@/modules/configuracion/queries/rooms";
 import { getHotelPolicies, getReceptionSettings } from "@/modules/configuracion/queries/policies";
 import { listHotelStaff, listSystemRoles } from "@/modules/configuracion/queries/staff";
+import { listPaymentMethodsForConfig, getCashSettingsForConfig } from "@/modules/configuracion/queries/payments";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -27,6 +28,9 @@ import {
   submitAddStaffMember,
   submitChangeStaffRole,
   submitSetStaffActive,
+  submitCreatePaymentMethod,
+  submitSetPaymentMethodActive,
+  submitUpdateCashSettings,
 } from "./actions";
 
 const BED_TYPES = [
@@ -118,6 +122,7 @@ export default async function ConfiguracionPage({
   const availableTabs = [
     canManageSettings ? "habitaciones" : null,
     canManageSettings ? "politicas" : null,
+    canManageSettings ? "caja" : null,
     canManageStaff ? "usuarios" : null,
   ].filter((t): t is string => t !== null);
   const tab = availableTabs.includes(params.tab || "") ? (params.tab as string) : availableTabs[0];
@@ -133,9 +138,13 @@ export default async function ConfiguracionPage({
   const staff = tab === "usuarios" ? await listHotelStaff(hotel.hotelId) : [];
   const systemRoles = tab === "usuarios" ? await listSystemRoles() : [];
 
+  const paymentMethods = tab === "caja" ? await listPaymentMethodsForConfig(hotel.hotelId) : [];
+  const cashSettings = tab === "caja" ? await getCashSettingsForConfig(hotel.hotelId) : null;
+
   const TAB_LABELS: Record<string, string> = {
     habitaciones: "Catálogo de habitaciones",
     politicas: "Políticas del hotel",
+    caja: "Métodos de pago y Caja",
     usuarios: "Usuarios y roles",
   };
 
@@ -440,6 +449,100 @@ export default async function ConfiguracionPage({
                   Bloquear el check-out si hay saldo pendiente
                 </label>
                 <Button>Guardar configuración de Recepción</Button>
+              </form>
+            </Card>
+          </div>
+        )}
+
+        {tab === "caja" && cashSettings && (
+          <div className="grid grid-cols-2 gap-6">
+            <Card className="space-y-4">
+              <CardTitle>Configuración de Caja</CardTitle>
+              <form action={submitUpdateCashSettings} className="space-y-3">
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <label className="flex items-center gap-2 text-muted-strong">
+                  <input type="checkbox" name="usaTurnosCaja" className="h-4 w-4" defaultChecked={cashSettings.usa_turnos_caja} />
+                  Usa turnos de caja (seguimiento de efectivo)
+                </label>
+                <label className="flex items-center gap-2 text-muted-strong">
+                  <input
+                    type="checkbox"
+                    name="requiereFacturacionFiscal"
+                    className="h-4 w-4"
+                    defaultChecked={cashSettings.requiere_facturacion_fiscal}
+                  />
+                  Requiere facturación fiscal (CFDI)
+                </label>
+                <Field label="RFC del hotel (opcional)">
+                  <TextInput name="rfcHotel" defaultValue={cashSettings.rfc_hotel ?? ""} />
+                </Field>
+                <Field label="Régimen fiscal (opcional)">
+                  <TextInput name="regimenFiscal" defaultValue={cashSettings.regimen_fiscal ?? ""} />
+                </Field>
+                <p className="text-xs text-muted">
+                  El timbrado real se delega a un PAC externo (integración futura) — esto sólo guarda los datos.
+                </p>
+                <Button>Guardar</Button>
+              </form>
+            </Card>
+
+            <Card className="space-y-4">
+              <CardTitle>Métodos de pago ({paymentMethods.length})</CardTitle>
+              <div className="space-y-2">
+                {paymentMethods.map((m) => (
+                  <div key={m.id} className={`rounded-lg border p-3 ${m.is_active ? "border-border" : "border-border bg-border/40 opacity-60"}`}>
+                    <div className="flex items-center justify-between">
+                      <b>
+                        {m.name} <span className="font-normal text-muted">({m.type})</span>
+                      </b>
+                      <Badge tone={m.is_active ? "success" : "neutral"}>{m.is_active ? "Activo" : "Inactivo"}</Badge>
+                    </div>
+                    <p className="text-xs text-muted">
+                      {m.requiere_referencia && "requiere referencia · "}
+                      {m.requiere_validacion_manual && "requiere validación manual · "}
+                      {m.genera_comision && "genera comisión"}
+                    </p>
+                    <form action={submitSetPaymentMethodActive} className="mt-1">
+                      <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                      <input type="hidden" name="methodId" value={m.id} />
+                      <input type="hidden" name="isActive" value={(!m.is_active).toString()} />
+                      <Button type="submit" variant="ghost">
+                        {m.is_active ? "Desactivar" : "Reactivar"}
+                      </Button>
+                    </form>
+                  </div>
+                ))}
+              </div>
+
+              <form action={submitCreatePaymentMethod} className="space-y-3 border-t border-border pt-4">
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <Field label="Nombre">
+                  <TextInput name="name" required placeholder="Ej. Efectivo" />
+                </Field>
+                <Field label="Tipo base">
+                  <Select name="type" defaultValue="cash">
+                    <option value="cash">Efectivo</option>
+                    <option value="card">Tarjeta</option>
+                    <option value="transfer">Transferencia</option>
+                    <option value="other">Otro</option>
+                  </Select>
+                </Field>
+                <label className="flex items-center gap-2 text-muted-strong">
+                  <input type="checkbox" name="requiereReferencia" className="h-4 w-4" />
+                  Requiere referencia
+                </label>
+                <label className="flex items-center gap-2 text-muted-strong">
+                  <input type="checkbox" name="requiereValidacionManual" className="h-4 w-4" />
+                  Requiere validación manual
+                </label>
+                <label className="flex items-center gap-2 text-muted-strong">
+                  <input type="checkbox" name="generaComision" className="h-4 w-4" />
+                  Genera comisión (costo del hotel)
+                </label>
+                <Field label="Proveedor (opcional)">
+                  <TextInput name="proveedor" />
+                </Field>
+                <Button>Agregar método</Button>
               </form>
             </Card>
           </div>

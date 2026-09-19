@@ -27,6 +27,16 @@ import {
   submitRegisterAdditionalPayment,
 } from "./actions";
 
+// payments.method ya no está limitado a card/transfer (0046, Caja amplió el
+// catálogo para aceptar cash/other) -- este mapa evita mostrar "transferencia"
+// para un pago que en realidad fue en efectivo.
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  cash: "efectivo",
+  card: "tarjeta",
+  transfer: "transferencia",
+  other: "otro",
+};
+
 export default async function ReservacionesPage({
   searchParams,
 }: {
@@ -256,7 +266,7 @@ export default async function ReservacionesPage({
               <p className="text-muted">{formatDate(reservationDetail.created_at)} · Reserva confirmada</p>
               {reservationDetail.payments.map((p, i) => (
                 <p key={i} className="text-muted">
-                  {formatDate(p.created_at)} · Pago registrado — ${p.amount} {p.currency} ({p.method === "card" ? "tarjeta" : "transferencia"})
+                  {formatDate(p.created_at)} · Pago registrado — ${p.amount} {p.currency} ({PAYMENT_METHOD_LABELS[p.method] ?? p.method})
                 </p>
               ))}
               {reservationDetail.status === "cancelled" && (

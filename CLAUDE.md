@@ -211,6 +211,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0042_snapshot_created_by_fix.sql` | Fix: `congelar_configuracion_comercial()` no fijaba `created_by` en el `INSERT` de `snapshot_comercial_habitacion` (quedaba siempre `NULL`) |
 | `0043_reception_readonly_functions_guard.sql` | Fix de seguridad: `can_deliver_room()`/`check_out_readiness()` (0026) eran `SECURITY DEFINER` sin validar `has_permission()` ni pertenencia al hotel -- ejecutables sin sesión y contra estancias de cualquier hotel (ver sección de Recepción) |
 | `0044_created_by_audit_fixes.sql` | Fix de auditoría: `attempt_inventory_hold()`/`confirm_reservation_from_hold()` no fijaban `inventory_blocks.created_by`; política de `quote_options` no exigía `created_by = auth.uid()` en el `WITH CHECK` (ver sección de Reservaciones) |
+| `0045_revoke_public_execute_internal_functions.sql` | Fix de seguridad: revoca `EXECUTE` de `PUBLIC`/`anon` en `expire_stale_holds()`, `recompute_stay_next_action()`, los 7 triggers `handle_*`, `set_audit_fields()`, `set_updated_at_only()`, `sync_stay_account_balance()` y `assert_hotel_member()` -- ninguna función interna debería tener grant a `anon` por el default de Postgres (ver sección de Reservaciones) |
+| `0046_caja_module.sql` | Módulo Caja: `payment_methods`, `payment_movements`, `cash_settings`, `cash_shifts`, `cash_movements`; extiende `payments`/`stay_transactions` (aditivo); funciones `register_payment_with_movements()`/`register_refund()`/`validate_payment()`/`register_stay_adjustment()`/`open_cash_shift()`/`close_cash_shift()`/`register_cash_expense()`; `hotels.moneda_base` (ver sección de Caja) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -926,7 +928,14 @@ se detecta probando clics repetidos contra la app corriendo — ni `psql`
 ni una sola verificación con Playwright (sin repetir el toggle) lo
 revelan.
 
-## Rack: decisiones de esquema (Módulo 05)
+## Rack: decisiones de esquema
+
+_(Nota: esta sección decía "Módulo 05", pero esa numeración chocaba con
+Habitaciones, que el dueño del producto confirmó explícitamente como
+Módulo 05 al pedir Caja/Módulo 06 -- ver esa sección. No se reafirma un
+número para Rack aquí porque no está confirmado contra la numeración real
+del proyecto; se quitó en vez de arriesgar otro choque. Pendiente:
+confirmar el número real de Rack con el dueño del producto.)_
 
 Pedido explícito y no negociable de esta sesión: el Rack es una capa de
 **vista**, no de dominio. Sin tablas propias (ninguna `rack_*`) y sin
@@ -1064,7 +1073,7 @@ anterior, vale la pena confirmarlo contra la API real antes de asumir que ya
 existe. Es la misma lección de la regla 9, aplicada aquí a "columna
 faltante" en vez de "función mal marcada".
 
-## Habitaciones: decisiones de esquema (Módulo 06)
+## Habitaciones: decisiones de esquema (Módulo 05)
 
 Completa el dominio que Rack, Reservaciones y Recepción ya consumían
 parcialmente vía `room_types`/`rooms` (creados en 0010, extendidos en
@@ -1188,6 +1197,235 @@ del ImpactAnalysis; reconciliar `capacity_adults`/`capacity_children`/
 `max_pets` (Habitaciones, nuevos). Ningún módulo de negocio nuevo
 (Rack/Recepción/Reservaciones) se tocó salvo el punto de integración
 explícito de `confirm.ts`.
+
+## Caja: decisiones de esquema (Módulo 06)
+
+Control del movimiento REAL de dinero de la operación. Principio de
+propietarios (no renegociable): Reservaciones responde qué se debe cobrar;
+Recepción responde cuándo debe pagar el huésped; **Caja responde qué
+movimiento real de dinero ocurrió y si cuadra**. Caja nunca se mezcla con
+Contabilidad/Finanzas (futuro, fuera de alcance).
+
+### Decisión central: CuentaFolio/MovimientoCuenta YA existen, no se duplican
+
+El spec de Caja pedía `CuentaFolio`/`MovimientoCuenta` como conceptos
+nuevos. Verificado antes de escribir código: **ya son `stay_accounts`/
+`stay_transactions` (0024, Recepción)** — inmutables, saldo mantenido por
+trigger, reverso por contrapartida nunca por edición. Crear una tabla
+paralela habría sido exactamente la regla 6 (nunca dupliques algo que ya
+existe) al nivel de esquema más caro posible para este módulo. En vez de
+eso, `0046_caja_module.sql`:
+
+- Amplía el catálogo cerrado de `stay_transactions.type` (antes sólo
+  `charge`/`payment`/`refund`) agregando `adjustment` — el único tipo
+  genuinamente nuevo que el spec necesitaba (ajustes manuales, ver abajo).
+- Agrega un trigger (`handle_cash_stay_transaction()`) que alimenta
+  `cash_movements` cuando una `stay_transactions` en efectivo ocurre —
+  sin tocar `register_stay_transaction()`/`void_stay_transaction()` (0026,
+  Recepción, sin cambios). Caja "alimenta" la cuenta ya existente
+  exactamente como pedía el principio de propietarios, nunca al revés.
+
+### `payments` (0017, Reservaciones) se extiende, no se reemplaza
+
+`payments` es el ledger de **la Reserva** (anticipos/abonos/pago total
+antes o al llegar el huésped) — distinto de `stay_transactions`, que es el
+ledger de **la Estancia física**. Caja necesitaba que `payments` aceptara
+efectivo y métodos configurables, y estados más ricos que
+`pending/completed/rejected/reversed`. Cambios, todos aditivos sobre una
+tabla en producción con datos reales:
+
+- **`payment_method_id`** (nueva FK nullable a `payment_methods`).
+  `method` (el texto legacy `card`/`transfer`) **se conserva intacto** —
+  `registerPayment()` de Reservaciones (`src/modules/reservaciones/
+  actions/payment.ts`) no se tocó y sigue funcionando exactamente igual,
+  sin saber que Caja existe (regla 7). Los pagos nuevos que salen de
+  `register_payment_with_movements()` (Caja) fijan ambas columnas.
+- **`method` amplía su `CHECK`** de `('card','transfer')` a
+  `('cash','card','transfer','other')` — esto sí fue necesario tocarlo
+  (no sólo "extender junto a"): sin ampliarlo, un pago en efectivo
+  registrado desde Caja habría violado el `CHECK` original al insertar.
+  Superset seguro: los dos valores legacy siguen siendo válidos, y
+  `registerPayment()` (tipo TS `"card" | "transfer"`) nunca manda otra
+  cosa, así que no hay regresión posible.
+- **`status` amplía su catálogo** a `pending | completed | rejected |
+  reversed | voided | pending_validation` — `completed` se **reusa**
+  para "APLICADO" del spec (nunca se agregó un sinónimo, regla 6);
+  `voided`/`pending_validation` son los dos genuinamente nuevos
+  (ANULADO/EN_VALIDACIÓN).
+- Los dos `CHECK` anónimos de `payments` (`method`, `status`) y los dos de
+  `stay_transactions` (`type` solo, y `type`+`amount` cruzado) se
+  localizan por catálogo (`pg_constraint`), nunca por nombre autogenerado
+  asumido — mismo patrón que 0033. Se encontró y corrigió un riesgo real
+  al escribir esto: dos `CHECK` distintos de `stay_transactions`
+  contienen las palabras `charge`/`payment`/`refund` a la vez (el de
+  `type` solo, y el cruzado con `amount`) — un filtro `ilike` que sólo
+  buscaba esas palabras habría emparejado ambos y hecho fallar el `select
+  ... into` con "more than one row returned". Se desambiguó exigiendo (o
+  excluyendo) la palabra `amount` en la definición.
+
+### `payment_movements`: 1 Pago → N MovimientoCaja, sólo `payments`
+
+Decisión explícita y cerrada: `payment_movements` (Pago dividido entre
+métodos, ej. $2,000 tarjeta + $1,000 efectivo = un `payments` + dos
+`payment_movements`) se ató **sólo a `payments`** (nivel Reserva), no a
+`stay_transactions` (nivel Estancia) — un pago durante la estancia sigue
+siendo un solo `stay_transactions.method` simple, como siempre. Sin
+política de INSERT/UPDATE de cliente (mismo patrón que
+`inventory_blocks`/`reservations`): el único camino es
+`register_payment_with_movements()`/`register_refund()`.
+
+### `payment_methods`: catálogo configurable, cortesía nunca es un método
+
+`payment_methods` es por hotel, con los flags del spec
+(`requiere_referencia`, `requiere_validacion_manual`, `genera_comision`,
+etc.). Se siembran 2 métodos por hotel automáticamente al crearse (mismo
+patrón `handle_new_hotel_*` que `reception_settings`/`hotel_policies`):
+`Tarjeta` (`type='card'`) y `Transferencia` (`type='transfer'`,
+`requiere_referencia=true`) — los dos valores que `payments.method` ya
+aceptaba, para que el backfill de pagos históricos tenga a qué mapear.
+**`Efectivo` no se siembra por defecto** — cada hotel lo agrega desde
+Configuración → Métodos de pago si lo necesita (la mayoría sí, pero no es
+universal: no se asumió). Cortesía nunca es un método de pago aquí — es
+un descuento vía `has_permission()`, porque no hubo dinero real (no se
+modeló ninguna fila para ese caso).
+
+### PermisoExcepcion: decisión TEMPORAL, no resuelta a propósito
+
+El spec pide reembolsos/ajustes vía `PermisoExcepcion` (autorización
+configurable). Ese módulo transversal **no existe todavía** y no se
+construyó aquí — pedido explícito: usar `has_permission()` simple
+(`cash.refund`, `cash.adjust`, sembrados a `hotel_admin` y `accounting`,
+**no** a `front_desk`) como el resto del proyecto ya hace en todos
+lados. **Esto queda documentado como decisión temporal, no definitiva**:
+cuando exista `PermisoExcepcion` como módulo propio, `register_refund()`
+y `register_stay_adjustment()` deben conectarse a él en vez de al
+permiso binario actual. No se re-litiga la decisión de no construirlo
+ahora; sí se re-litiga (a propósito) cuál mecanismo de autorización usan
+estas dos funciones, el día que exista.
+
+### TurnoCaja (`cash_shifts`/`cash_movements`): lo único genuinamente nuevo
+
+Un turno abierto por hotel a la vez (índice único parcial
+`where status = 'open'`) — el turno es el periodo/caja física, **no** el
+usuario: varios usuarios pueden cobrar en el mismo turno, cada
+`cash_movements.created_by` conserva quién hizo cada movimiento.
+
+`cash_movements` es la única fuente para calcular `EfectivoEsperado`
+(`fondo_inicial + Σcash_in − Σcash_out`) — nunca se deriva sumando por
+separado `payment_movements`+`stay_transactions` en dos lugares (regla
+6). Se llena sola por tres caminos, nunca INSERT directo del cliente:
+
+1. **Trigger** sobre `stay_transactions` en efectivo (ver arriba) —
+   **best-effort, nunca bloquea a Recepción**: si el hotel no usa turnos
+   (`cash_settings.usa_turnos_caja = false`) o no hay turno abierto, el
+   trigger simplemente no genera el movimiento y `register_stay_
+   transaction()` sigue funcionando igual (validado explícitamente:
+   Recepción no puede depender del estado de Caja para operar, mismo
+   principio ya cerrado en el Módulo 03). Es un hueco operativo real y
+   consciente si el hotel usa turnos pero olvida abrir uno — no se
+   bloquea retroactivamente algo que Recepción necesita poder hacer
+   siempre.
+2. **`register_payment_with_movements()`/`register_refund()`** (Caja,
+   nivel Reserva) — aquí **sí bloquea**: si el método es efectivo y el
+   hotel usa turnos pero no hay uno abierto, rechaza con
+   `NO_OPEN_CASH_SHIFT`. La asimetría con el punto 1 es intencional: este
+   es un camino nuevo que Caja controla por completo, sin una función
+   ajena que dependa de que funcione siempre.
+3. **`register_cash_expense()`** — egreso operativo manual (taxi, caja
+   chica, proveedor menor). Límite explícito de v1: nunca cuentas por
+   pagar ni gasto contable completo, eso es el futuro módulo de
+   Finanzas — `register_cash_expense()` sólo acepta un turno abierto y
+   un monto/concepto, sin flujo de aprobación previo (el propio permiso
+   `payments.register` ya es la autorización).
+
+`close_cash_shift()` calcula `efectivo_esperado`/`diferencia` en el
+momento del cierre (nunca recalculado después) y los guarda —
+`EfectivoContado − EfectivoEsperado`, mostrado en lenguaje simple desde
+la UI (`/caja`), nunca como variable técnica cruda.
+
+### Saldo de la Reserva vs. saldo de la Estancia — dos saldos distintos, a propósito
+
+`getReservationBalance()` (`src/modules/caja/queries/payments.ts`) calcula
+`Σreservation_stays.rate_total − Σpayments.amount` (neto, `payments.amount`
+ya viene con signo: positivo cobros, negativo reembolsos) — es el saldo
+que usa el guard de sobrepago de `register_payment_with_movements()`.
+**Esto es un saldo distinto de `stay_accounts.balance`** (Recepción,
+0024): uno es "cuánto se ha pagado de lo vendido en la Reserva", el otro
+es "cuánto debe la Estancia física ahora mismo" (incluye cargos por
+consumos/activos que Reservaciones nunca ve). No se fusionan — cada uno
+sigue siendo responsabilidad de su módulo, mismo principio que ya cerró
+Recepción con `hotel_policies`/`reception_settings` en Configuración.
+Nunca se muestra un saldo negativo crudo: `formatBalanceLabel()` traduce
+a "Falta por pagar"/"Saldo a favor"/"Cuenta liquidada".
+
+### Sobrepago: nunca se acepta en silencio
+
+`register_payment_with_movements()` calcula el saldo de la Reserva antes
+de insertar; si el monto del pago lo supera y el caller no manda
+`p_confirm_overpayment = true`, rechaza con `OVERPAYMENT_CONFIRMATION_
+REQUIRED` (incluye el saldo pendiente y el monto intentado en el mensaje
+para que la UI pueda mostrar la pregunta explícita del spec: "Corregir
+monto" / "Registrar saldo a favor"). La UI de `/caja` expone esto como un
+checkbox de confirmación explícito, nunca un reintento silencioso.
+
+### Reembolsos: entrada siempre positiva, signo interno preservado
+
+`register_refund()` recibe `p_amount` siempre positivo (nunca se le pide
+al usuario capturar un número negativo) y exige motivo. Internamente
+inserta `payments` con `amount = -p_amount` — el `CHECK` original de
+0017 (`type = 'refund' and amount < 0`) **no se tocó**: seguía siendo
+correcto, sólo la UX de captura cambió. Valida que el reembolso no
+exceda el pago original cuando se vincula uno (`REFUND_EXCEEDS_
+ORIGINAL`), y genera `cash_movements` tipo `cash_out` si el método es
+efectivo, con la misma exigencia de turno abierto que un cobro.
+
+### Ajustes manuales: nunca se edita el saldo directo
+
+`register_stay_adjustment()` es el único camino para insertar una fila
+`stay_transactions` tipo `adjustment` (permiso `cash.adjust`) — motivo
+obligatorio, monto distinto de cero (puede ser positivo o negativo, a
+diferencia de `charge`/`payment`/`refund` que tienen signo fijo por
+tipo). `register_stay_transaction()`/`void_stay_transaction()` (0026)
+nunca emiten este tipo — su propia validación de signo interna sólo
+conoce `charge`/`payment`/`refund`, así que ni siquiera intentarían
+producir uno por error.
+
+### Herencias obligatorias de este proyecto, aplicadas tal cual
+
+Cada función `SECURITY DEFINER` nueva deriva `hotel_id` de la fila
+(`stays`/`payments`/`cash_shifts`), nunca de un parámetro suelto que el
+caller pudiera desalinear (lección 0040/0043) — validado explícitamente
+contra un usuario de otro hotel intentando `register_stay_adjustment()`
+y `register_cash_expense()` sobre filas ajenas: ambos rechazan con
+`PERMISSION_DENIED` porque `has_permission()` evalúa el `hotel_id` real
+de la fila, no uno que el caller pudiera mandar. `created_by` se fija
+explícitamente en cada `INSERT` de las tablas append-only nuevas
+(`payment_movements`, `cash_movements`) — lección 0044/regla 11: ninguna
+tiene `updated_at`/`updated_by` ni acepta INSERT directo del cliente.
+`module.caja` se valida en cada Server Action (`assertFeatureEnabled()`,
+nueva en `src/lib/auth/platform.ts`) antes de mutar, siguiendo el patrón
+que la sección de Plataforma ya documentó para features conmutables.
+
+### Fuera de alcance a propósito (MVP de esta sesión)
+
+Conciliación completa de método de pago (queda para v2 — pero
+`payments`/`payment_movements` ya están diseñadas para no bloquear esa
+evolución: `genera_comision`/`proveedor` en `payment_methods` y
+`validated_at`/`validated_by` en `payment_movements` ya existen sin
+consumidor todavía); corte de caja intermedio sin cerrar turno;
+timbrado real de CFDI (`cash_settings.requiere_facturacion_fiscal`/
+`rfc_hotel`/`regimen_fiscal` sólo guardan los datos, la integración con
+un PAC externo es trabajo futuro); pago que cubre más de una reserva a
+la vez (grupos); reembolso parcial de un pago dividido entre métodos
+(hoy un reembolso es un método a la vez); Radar 360/Mi Hotel Hoy
+consumiendo estos datos. Ningún módulo de negocio existente
+(Reservaciones/Recepción/Rack/Habitaciones) se tocó salvo: el `CHECK` de
+`payments.method`/`status` (necesario, ver arriba), el `CHECK` de
+`stay_transactions.type` (necesario), y un display de un solo renglón en
+`src/app/reservaciones/page.tsx` (el texto de método de pago sólo sabía
+mostrar "tarjeta"/"transferencia", y ahora un pago en efectivo real
+podía llegar por ahí desde que `payments.method` acepta `cash`).
+
 ## Plataforma: licencias y features (Fase 0)
 
 Decisiones de modelo comercial multi-tenant:
@@ -1575,7 +1813,8 @@ src/
     reservaciones/        Página de prueba del módulo: buscar → cotizar → Hold → confirmar → listado.
     recepcion/            Página de prueba del módulo: llegada → check-in → asignar → entregar → cobrar → check-out.
     rack/                 Cuadrícula habitación×fecha (capa de vista, ver sección Rack).
-    configuracion/        Página de prueba del módulo: catálogo de habitaciones, políticas del hotel, usuarios y roles (tabs).
+    configuracion/        Página de prueba del módulo: catálogo de habitaciones, políticas del hotel, métodos de pago/Caja, usuarios y roles (tabs).
+    caja/                 Página de prueba del módulo: turno de caja, cobrar/reembolsar por reserva, pendientes de validar, ajuste manual de estancia.
   proxy.ts                Refresca la sesión de Supabase en cada request (convención Next.js 16; reemplaza a middleware.ts).
   lib/
     supabase/
@@ -1596,8 +1835,8 @@ src/
       actions/             lifecycle.ts (transiciones de Estancia), account.ts (cuenta/transacciones), service.ts (solicitudes/incidencias/activos).
       queries/             stays.ts — listado, detalle, habitaciones asignables, config y catálogo de activos.
     configuracion/
-      actions/             rooms.ts (tipos/habitaciones), policies.ts (hotel_policies/reception_settings), staff.ts (alta/rol/activación).
-      queries/             rooms.ts, policies.ts, staff.ts — lecturas propias, no importadas de otros módulos (regla 7).
+      actions/             rooms.ts (tipos/habitaciones), policies.ts (hotel_policies/reception_settings), staff.ts (alta/rol/activación), payments.ts (payment_methods/cash_settings -- lectura/escritura propia, no importa modules/caja/, regla 7).
+      queries/             rooms.ts, policies.ts, staff.ts, payments.ts — lecturas propias, no importadas de otros módulos (regla 7).
     rack/
       queries/             grid.ts — getRackGrid() (capa de vista, combina Reservaciones/Recepción/Habitaciones, sin tabla propia).
       actions/             assignments.ts — assignRoomFromRack(), reusa assign_room() (0026) vía RPC.
@@ -1611,7 +1850,9 @@ src/
     habitaciones/
       queries/             roomTypes.ts, rooms.ts — catálogo, amenidades/activos base, resolveRoomAmenities()/resolveRoomAssets() (herencia con excepción).
       actions/             roomTypes.ts (capacidad vía RPC con ImpactAnalysis, catálogo de amenidades), rooms.ts (deactivate/reactivate vía RPC, excepciones), snapshot.ts (congelarConfiguracionComercial(), propio punto de entrada -- Reservaciones llama al RPC directo, no este archivo).
-    caja/  (carpeta lista, sin lógica todavía)
+    caja/
+      actions/             payments.ts (registerPaymentWithMovements/registerRefund/validatePayment), shifts.ts (openShift/closeShift/registerCashExpense), adjustments.ts (registerStayAdjustment).
+      queries/             payments.ts (metodos, saldo de reserva, pagos, pendientes de validar), shifts.ts (turno abierto/historial/movimientos), settings.ts (cash_settings).
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.
   types/

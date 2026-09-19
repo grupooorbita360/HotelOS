@@ -27,6 +27,7 @@ export interface Database {
           status: HotelStatus;
           timezone: string;
           country: string | null;
+          moneda_base: string;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -40,6 +41,7 @@ export interface Database {
           status?: HotelStatus;
           timezone?: string;
           country?: string | null;
+          moneda_base?: string;
         };
         Update: Partial<Database["public"]["Tables"]["hotels"]["Insert"]>;
         Relationships: [];
@@ -886,6 +888,7 @@ export interface Database {
           amount_local: number;
           method: string;
           status: string;
+          payment_method_id: string | null;
           receipt_url: string | null;
           notes: string | null;
           created_at: string;
@@ -904,6 +907,7 @@ export interface Database {
           amount_local: number;
           method: string;
           status?: string;
+          payment_method_id?: string | null;
           receipt_url?: string | null;
           notes?: string | null;
         };
@@ -914,6 +918,165 @@ export interface Database {
             columns: ["reservation_id"];
             isOneToOne: false;
             referencedRelation: "reservations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "payments_payment_method_id_fkey";
+            columns: ["payment_method_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_methods";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      payment_methods: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          name: string;
+          type: string;
+          is_active: boolean;
+          requiere_referencia: boolean;
+          requiere_autorizacion: boolean;
+          requiere_terminal: boolean;
+          permite_moneda_extranjera: boolean;
+          requiere_validacion_manual: boolean;
+          genera_comision: boolean;
+          proveedor: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          name: string;
+          type: string;
+          is_active?: boolean;
+          requiere_referencia?: boolean;
+          requiere_autorizacion?: boolean;
+          requiere_terminal?: boolean;
+          permite_moneda_extranjera?: boolean;
+          requiere_validacion_manual?: boolean;
+          genera_comision?: boolean;
+          proveedor?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["payment_methods"]["Insert"]>;
+        Relationships: [];
+      };
+      payment_movements: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          payment_id: string;
+          payment_method_id: string;
+          amount: number;
+          reference: string | null;
+          validated_at: string | null;
+          validated_by: string | null;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          payment_id: string;
+          payment_method_id: string;
+          amount: number;
+          reference?: string | null;
+        };
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "payment_movements_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "payment_movements_payment_method_id_fkey";
+            columns: ["payment_method_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_methods";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      cash_settings: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          usa_turnos_caja: boolean;
+          requiere_facturacion_fiscal: boolean;
+          rfc_hotel: string | null;
+          regimen_fiscal: string | null;
+          extra_settings: Json;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          hotel_id: string;
+          usa_turnos_caja?: boolean;
+          requiere_facturacion_fiscal?: boolean;
+          rfc_hotel?: string | null;
+          regimen_fiscal?: string | null;
+          extra_settings?: Json;
+        };
+        Update: Partial<Database["public"]["Tables"]["cash_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      cash_shifts: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          status: string;
+          fondo_inicial: number;
+          opened_at: string;
+          opened_by: string | null;
+          efectivo_contado: number | null;
+          efectivo_esperado: number | null;
+          diferencia: number | null;
+          closed_at: string | null;
+          closed_by: string | null;
+          notes: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      cash_movements: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          cash_shift_id: string;
+          type: string;
+          source: string;
+          amount: number;
+          concept: string;
+          category: string | null;
+          receipt_url: string | null;
+          payment_movement_id: string | null;
+          stay_transaction_id: string | null;
+          authorized_by: string | null;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "cash_movements_cash_shift_id_fkey";
+            columns: ["cash_shift_id"];
+            isOneToOne: false;
+            referencedRelation: "cash_shifts";
             referencedColumns: ["id"];
           },
         ];
@@ -1241,6 +1404,56 @@ export interface Database {
       void_stay_transaction: {
         Args: { p_transaction_id: string; p_reason?: string | null };
         Returns: Database["public"]["Tables"]["stay_transactions"]["Row"];
+      };
+      // Caja (0046).
+      register_payment_with_movements: {
+        Args: {
+          p_hotel_id: string;
+          p_reservation_id: string;
+          p_type: string;
+          p_movements: Json;
+          p_currency?: string;
+          p_notes?: string | null;
+          p_confirm_overpayment?: boolean;
+        };
+        Returns: Database["public"]["Tables"]["payments"]["Row"];
+      };
+      register_refund: {
+        Args: {
+          p_hotel_id: string;
+          p_reservation_id: string;
+          p_original_payment_id: string | null;
+          p_amount: number;
+          p_payment_method_id: string;
+          p_reason: string;
+        };
+        Returns: Database["public"]["Tables"]["payments"]["Row"];
+      };
+      validate_payment: {
+        Args: { p_payment_id: string };
+        Returns: Database["public"]["Tables"]["payments"]["Row"];
+      };
+      register_stay_adjustment: {
+        Args: { p_stay_id: string; p_amount: number; p_concept: string };
+        Returns: Database["public"]["Tables"]["stay_transactions"]["Row"];
+      };
+      open_cash_shift: {
+        Args: { p_hotel_id: string; p_fondo_inicial?: number; p_notes?: string | null };
+        Returns: Database["public"]["Tables"]["cash_shifts"]["Row"];
+      };
+      close_cash_shift: {
+        Args: { p_shift_id: string; p_efectivo_contado: number; p_notes?: string | null };
+        Returns: Database["public"]["Tables"]["cash_shifts"]["Row"];
+      };
+      register_cash_expense: {
+        Args: {
+          p_shift_id: string;
+          p_amount: number;
+          p_concept: string;
+          p_category?: string | null;
+          p_receipt_url?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["cash_movements"]["Row"];
       };
       attempt_check_out: {
         Args: { p_stay_id: string };
