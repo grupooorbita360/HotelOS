@@ -1135,6 +1135,10 @@ export interface Database {
         Args: { p_hotel_id: string; p_permission_code: string };
         Returns: boolean;
       };
+      user_hotel_ids: {
+        Args: Record<PropertyKey, never>;
+        Returns: string[];
+      };
       check_availability: {
         Args: {
           p_hotel_id: string;
@@ -1199,6 +1203,10 @@ export interface Database {
       register_arrival: {
         Args: { p_stay_id: string };
         Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      recompute_stay_next_action: {
+        Args: { p_stay_id: string };
+        Returns: undefined;
       };
       check_in: {
         Args: { p_stay_id: string };
@@ -1313,6 +1321,10 @@ export interface Database {
         Returns: Database["public"]["Tables"]["room_types"]["Row"];
       };
       // Plataforma (0039/0040).
+      assert_hotel_member: {
+        Args: { p_hotel_id: string };
+        Returns: undefined;
+      };
       has_feature: {
         Args: { p_hotel_id: string; p_feature_key: string };
         Returns: boolean;
