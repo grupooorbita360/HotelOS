@@ -43,7 +43,7 @@ returns public.inventory_holds
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $func$
 declare
   v_hold public.inventory_holds;
   v_day date;
@@ -117,7 +117,7 @@ begin
 
   return v_hold;
 end;
-$$;
+$func$;
 
 create or replace function public.confirm_reservation_from_hold(
   p_hold_id uuid,
@@ -136,7 +136,7 @@ returns public.reservations
 language plpgsql
 security definer
 set search_path = public
-as $$
+as $func$
 declare
   v_hold public.inventory_holds;
   v_reservation public.reservations;
@@ -205,7 +205,7 @@ begin
 
   return v_reservation;
 end;
-$$;
+$func$;
 
 -- quote_options: mismo patrón que timeline_events (regla 11) -- tabla sin
 -- updated_at/updated_by, poblada por INSERT directo del cliente. Se
