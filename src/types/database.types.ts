@@ -683,6 +683,7 @@ export interface Database {
           taxes?: number;
           total: number;
           rules_applied?: Json;
+          created_by: string;
         };
         Update: Partial<Database["public"]["Tables"]["quote_options"]["Insert"]>;
         Relationships: [
