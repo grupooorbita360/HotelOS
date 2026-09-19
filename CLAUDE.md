@@ -208,6 +208,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0039_platform_licenses.sql` | Fase 0/Plataforma (rama `feature/fase-0-plataforma`, aún no fusionada a esta rama): `hotel_licenses`, `plan_features`, `hotel_feature_overrides`, funciones `has_feature()`/`hotel_enabled_features()`/`hotel_limit_usage()`. No documentado en detalle aquí — es dueño ese trabajo, no éste. |
 | `0040_hotel_functions_membership_guard.sql` | Fase 0/Plataforma (rama `fix/fase0-security-0040`, aún no fusionada a esta rama): `assert_hotel_member()` + guard de pertenencia en las tres funciones de 0039. |
 | `0041_habitaciones_domain.sql` | Módulo Habitaciones: capacidad explícita aditiva en `room_types`, desactivación con motivo obligatorio en `rooms`, catálogo de amenidades + herencia con excepción (amenidades y activos), `snapshot_comercial_habitacion`, funciones `deactivate_room()`/`reactivate_room()`/`update_room_type_capacity()` (ImpactAnalysis) y `congelar_configuracion_comercial()` (ver sección Habitaciones). No depende de 0039/0040 (no toca `room_types`/`rooms`, sin colisión de nombres de tabla/función) |
+| `0042_snapshot_created_by_fix.sql` | Fix: `congelar_configuracion_comercial()` no fijaba `created_by` en el `INSERT` de `snapshot_comercial_habitacion` (quedaba siempre `NULL`) |
+| `0043_reception_readonly_functions_guard.sql` | Fix de seguridad: `can_deliver_room()`/`check_out_readiness()` (0026) eran `SECURITY DEFINER` sin validar `has_permission()` ni pertenencia al hotel -- ejecutables sin sesión y contra estancias de cualquier hotel (ver sección de Recepción) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -553,6 +555,54 @@ garantice como en `timeline_events`). Corregido en
 append-only sin `updated_at`/`updated_by` que se escriba solo desde una
 función `SECURITY DEFINER` necesita que **esa función** fije `created_by`
 explícitamente — no hay trigger genérico ni RLS que lo haga por ti.
+
+### Falla de seguridad real: `can_deliver_room()`/`check_out_readiness()` sin guard (0043)
+
+Auditoría externa detectó que estas dos funciones (0026), aunque
+`SECURITY DEFINER`, recibían un `stay_id` libre y no validaban nada: ni
+`has_permission()`, ni siquiera que la fila existiera. Al correr como su
+dueño, `SECURITY DEFINER` **ignora RLS por completo** -- exactamente la
+razón por la que cualquier función así que toque datos multi-tenant debe
+hacer su propia validación, como ya hacían `deliver_room()`/
+`attempt_check_out()`/`deactivate_room()` en el mismo archivo/proyecto.
+Sin ese guard, ambas eran ejecutables **sin sesión** (`anon`) y devolvían
+saldo pendiente, activos sin devolver e incidencias abiertas de
+**cualquier hotel**, con sólo conocer/adivinar el UUID de una estancia --
+exactamente el tipo de fuga entre tenants que RLS existe para impedir, y
+que ninguna política de RLS puede tapar una vez que la función corre como
+su dueño.
+
+Corregido en `0043_reception_readonly_functions_guard.sql` con el mismo
+patrón que `deactivate_room()`: `select * into v_stay from public.stays
+where id = p_stay_id; if not found then raise 'STAY_NOT_FOUND'; end if;`
+seguido de `has_permission(v_stay.hotel_id, 'checkin.perform' |
+'checkout.perform')` -- el permiso elegido por consistencia con la acción
+que cada función precede (`deliver_room()` exige `checkin.perform`,
+`attempt_check_out()` exige `checkout.perform`). `hotel_id` sale siempre
+de la fila real, nunca de un parámetro separado que el caller pudiera
+desalinear. No se tocó nada más del cuerpo de ninguna de las dos
+funciones.
+
+**Validado contra Supabase real** (no sólo local) con las tres pruebas
+que exige cualquier cambio de guard multi-tenant en este proyecto: (A)
+llamada sin sesión (`anon`, sin `Authorization`) con un `stay_id` real ->
+`401`, `PERMISSION_DENIED`; (B) usuario con sesión y permiso sobre una
+estancia de su propio hotel -> respuesta normal, sin regresión; (C)
+usuario con sesión y con ese mismo permiso, pero en **otro** hotel,
+contra una estancia ajena -> `403`, `PERMISSION_DENIED` -- prueba que el
+guard valida el hotel de la fila, no sólo si el caller tiene el permiso
+en algún hotel. El usuario de la prueba (C) fue una cuenta desechable
+creada y borrada sólo para la prueba (nunca se tocaron credenciales de
+una cuenta real).
+
+Hallazgo aparte, no corregido a propósito (fuera del alcance de este
+fix -- "no toques nada más de estas dos funciones salvo el guard"):
+`can_deliver_room()` ya tenía, desde el 0026 original, un bug de lógica
+independiente -- cuando hay saldo pendiente hace `return query select
+false, reason` pero no corta el flujo, así que después ejecuta también el
+`return query select true, null` final, devolviendo 2 filas en vez de 1.
+Documentado aquí para que una sesión futura lo corrija a propósito, no
+por accidente al tocar esta función de nuevo.
 
 ### Alcance de esta sesión (fuera de alcance a propósito)
 
