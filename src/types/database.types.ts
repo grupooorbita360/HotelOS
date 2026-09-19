@@ -1311,6 +1311,7 @@ export interface Database {
       update_room_type_capacity: {
         Args: { p_room_type_id: string; p_base_adults: number; p_max_adults: number; p_max_children: number; p_max_pets: number };
         Returns: Database["public"]["Tables"]["room_types"]["Row"];
+      };
       // Plataforma (0039/0040).
       has_feature: {
         Args: { p_hotel_id: string; p_feature_key: string };
