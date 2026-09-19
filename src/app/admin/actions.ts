@@ -4,7 +4,10 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import {
   createHotel,
+  updateHotel,
   updateHotelLicense,
+  assignHotelOwner,
+  resendOwnerInvite,
   setFeatureOverride,
   removeFeatureOverride,
 } from "@/modules/platform/actions/hotels";
@@ -49,6 +52,16 @@ export async function submitCreateHotel(formData: FormData) {
   );
 }
 
+export async function submitUpdateHotel(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  await runOrError("hoteles", () =>
+    updateHotel(hotelId, {
+      name: String(formData.get("name")),
+      timezone: String(formData.get("timezone") || "America/Mexico_City"),
+    }),
+  );
+}
+
 export async function submitUpdateHotelLicense(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   await runOrError("hoteles", () =>
@@ -61,6 +74,20 @@ export async function submitUpdateHotelLicense(formData: FormData) {
       notes: String(formData.get("notes") || ""),
     }),
   );
+}
+
+export async function submitAssignHotelOwner(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  await runOrError("hoteles", () =>
+    assignHotelOwner(hotelId, {
+      ownerEmail: String(formData.get("ownerEmail")),
+      ownerName: String(formData.get("ownerName") || "") || undefined,
+    }),
+  );
+}
+
+export async function submitResendOwnerInvite(formData: FormData) {
+  await runOrError("hoteles", () => resendOwnerInvite(String(formData.get("ownerEmail"))));
 }
 
 export async function submitSetFeatureOverride(formData: FormData) {
