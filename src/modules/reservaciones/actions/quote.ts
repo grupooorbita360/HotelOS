@@ -30,6 +30,11 @@ export async function createQuote(input: CreateQuoteInput) {
   await requirePermission(input.hotelId, "reservations.create");
   const supabase = await createClient();
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("No hay sesión activa.");
+
   const { data: lead, error: leadError } = await supabase
     .from("leads")
     .insert({
@@ -77,6 +82,7 @@ export async function createQuote(input: CreateQuoteInput) {
       subtotal: input.subtotal,
       taxes: input.taxes,
       total: input.total,
+      created_by: user.id,
     })
     .select("id")
     .single();

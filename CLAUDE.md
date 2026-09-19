@@ -210,6 +210,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0041_habitaciones_domain.sql` | Módulo Habitaciones: capacidad explícita aditiva en `room_types`, desactivación con motivo obligatorio en `rooms`, catálogo de amenidades + herencia con excepción (amenidades y activos), `snapshot_comercial_habitacion`, funciones `deactivate_room()`/`reactivate_room()`/`update_room_type_capacity()` (ImpactAnalysis) y `congelar_configuracion_comercial()` (ver sección Habitaciones). No depende de 0039/0040 (no toca `room_types`/`rooms`, sin colisión de nombres de tabla/función) |
 | `0042_snapshot_created_by_fix.sql` | Fix: `congelar_configuracion_comercial()` no fijaba `created_by` en el `INSERT` de `snapshot_comercial_habitacion` (quedaba siempre `NULL`) |
 | `0043_reception_readonly_functions_guard.sql` | Fix de seguridad: `can_deliver_room()`/`check_out_readiness()` (0026) eran `SECURITY DEFINER` sin validar `has_permission()` ni pertenencia al hotel -- ejecutables sin sesión y contra estancias de cualquier hotel (ver sección de Recepción) |
+| `0044_created_by_audit_fixes.sql` | Fix de auditoría: `attempt_inventory_hold()`/`confirm_reservation_from_hold()` no fijaban `inventory_blocks.created_by`; política de `quote_options` no exigía `created_by = auth.uid()` en el `WITH CHECK` (ver sección de Reservaciones) |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -334,8 +335,14 @@ Se agregó:
   `contingency`. Los 4 originales (`hold`, `reservation`, `maintenance`,
   `overbooking`) siguen intactos.
 - `reason` (texto, nullable) y `created_by` (uuid, nullable, FK a
-  `auth.users`) — sólo para bloqueos manuales futuros; `NULL` para
-  `hold`/`reservation`, que ya se auditan vía `hold_id`/`reservation_stay_id`.
+  `auth.users`) — pensados originalmente sólo para bloqueos manuales
+  futuros, asumiendo que `hold`/`reservation` ya quedaban auditados vía
+  `hold_id`/`reservation_stay_id`. **Corrección (0044, ver más abajo):**
+  ese supuesto resultó equivocado — `hold_id`/`reservation_stay_id`
+  identifican la entidad de negocio, no quién ejecutó la acción; sin
+  `created_by`, no había forma de saber qué usuario creó un Hold o
+  confirmó una reserva. Por eso `created_by` sí se fija ahora también para
+  `hold`/`reservation`, no sólo para bloqueos manuales.
 
 **Decisión de nombres:** el pedido original pidió `motivo`/`usuario_id` y
 "MANTENIMIENTO" como valor nuevo de `block_type`. Se ajustó a
@@ -370,6 +377,45 @@ directo. Los dos `check` de 0015 eran anónimos (declarados inline) — no se
 puede ensanchar un `check` in place, así que la migración los localiza por
 catálogo (`pg_constraint`) y los reemplaza, en vez de asumir un nombre
 autogenerado que podría no coincidir entre el entorno local y Supabase.
+
+### Bug real de auditoría: `inventory_blocks.created_by` y `quote_options.created_by` en NULL (0044)
+
+Auditoría externa encontró dos huecos reales, del mismo tipo que el ya
+corregido en `stay_transactions` (0028) y `snapshot_comercial_habitacion`
+(0042): una columna `created_by` que existe en el esquema pero nunca se
+llenaba.
+
+- **`inventory_blocks.created_by`**: `attempt_inventory_hold()` insertaba
+  filas `block_type = 'hold'` sin listar `created_by` en absoluto (ver
+  corrección de la nota de 0033 arriba); `confirm_reservation_from_hold()`
+  las re-etiquetaba a `'reservation'` sin tocarlo tampoco. Corregido
+  fijando `created_by = auth.uid()` en el `INSERT` de la primera, y
+  `created_by = coalesce(created_by, auth.uid())` en el `UPDATE` de la
+  segunda — `coalesce` porque, una vez corregido el `INSERT`, el valor ya
+  viene bien desde que se creó el Hold, y `created_by` significa "quién
+  creó la fila", no "quién la tocó por última vez" (esta tabla no tiene
+  `updated_by` para eso); el `coalesce` sólo actúa de respaldo si una fila
+  llegara con `NULL` de todos modos.
+- **`quote_options.created_by`**: a diferencia de `inventory_blocks`, esta
+  tabla sí acepta `INSERT` directo del cliente (0012) — mismo patrón que
+  `timeline_events` (regla 11: tabla sin `updated_at`/`updated_by`, INSERT
+  directo, RLS como garantía real). `createQuote()` (TypeScript) nunca
+  mandaba `created_by`, y la política RLS de escritura no lo exigía, así
+  que quedaba `NULL` sin que nada lo impidiera. Corregido en dos partes:
+  la política de `quote_options` ahora exige `created_by = auth.uid()` en
+  el `WITH CHECK` (igual que `timeline_events_insert_member_as_self`), y
+  `createQuote()` (`src/modules/reservaciones/actions/quote.ts`) ahora
+  manda `created_by: user?.id` obtenido de `supabase.auth.getUser()`. Los
+  dos cambios son necesarios juntos: sin el `WITH CHECK`, un caller que se
+  saltara el Server Action podría insertar con un `created_by` ajeno; sin
+  el cambio en `createQuote()`, el flujo normal de la app habría empezado
+  a fallar contra el `WITH CHECK` nuevo (el INSERT ya no habría cumplido
+  la condición).
+
+Migración: `0044_created_by_audit_fixes.sql`. Validado localmente y
+contra Supabase real: crear un Hold y confirmar una reserva real deja
+`inventory_blocks.created_by` con el usuario real (no `NULL`); crear una
+cotización real deja `quote_options.created_by` con el usuario real.
 
 ### Actualización de UI (feedback de uso real, misma sesión)
 
@@ -1412,6 +1458,30 @@ pidió explícitamente no construir. La mitigación por eso no es "impedir
 la llamada directa" (no es posible sin esa infraestructura) sino "reducir
 al mínimo necesario lo que esa llamada puede fabricar", exactamente lo
 que hace el punto 1.
+
+### Trade-off consciente: `hotel_priorities.created_by` queda NULL en toda alerta del motor (0038)
+
+Consecuencia directa del cierre de 0038: `upsert_hotel_priority()` sólo
+acepta llamadas de `service_role` (`auth.role() = 'service_role'`), y el
+trigger genérico `set_audit_fields()` que sí tiene `hotel_priorities`
+(0036) fija `created_by = auth.uid()` -- que para una llamada de
+`service_role` (sin JWT de usuario) siempre es `NULL`. Es decir: **toda
+prioridad creada por el motor queda con `created_by = NULL`**, siempre,
+por diseño de 0038, no por un bug.
+
+Auditoría externa lo señaló y el dueño del producto ya decidió: esto se
+**acepta tal cual**, no se corrige. Una alerta generada automáticamente
+por una regla del sistema no tiene un "creador humano" -- forzar un
+`created_by` ahí (ej. usando el `auth.uid()` de quien disparó la
+evaluación desde la UI, que es incidental y no el origen real de la
+alerta) sería falsear la auditoría, no repararla. La auditoría real de
+"por qué existe esta prioridad" ya vive en `rule_id` + `detected_at` +
+`source_event_id` (0036/0037), que sí describen el origen con precisión;
+`created_by` simplemente no es el campo correcto para esa pregunta en
+esta tabla. Las 5 transiciones humanas (`acknowledge_hotel_priority()` y
+el resto, 0037) sí corren con el cliente de sesión del usuario y sí dejan
+`updated_by` correcto -- el hueco es exclusivamente `created_by` en el
+`INSERT` original del motor, y sólo ahí.
 
 ## Convenciones de nombres
 
