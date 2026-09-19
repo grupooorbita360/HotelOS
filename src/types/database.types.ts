@@ -44,6 +44,72 @@ export interface Database {
         Update: Partial<Database["public"]["Tables"]["hotels"]["Insert"]>;
         Relationships: [];
       };
+      hotel_licenses: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          rooms_max: number | null;
+          users_max: number | null;
+          starts_at: string;
+          expires_at: string | null;
+          notes: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          rooms_max?: number | null;
+          users_max?: number | null;
+          starts_at?: string;
+          expires_at?: string | null;
+          notes?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["hotel_licenses"]["Insert"]>;
+        Relationships: [];
+      };
+      plan_features: {
+        Row: {
+          feature_key: string;
+          plan: HotelPlan;
+          enabled: boolean;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          feature_key: string;
+          plan: HotelPlan;
+          enabled?: boolean;
+        };
+        Update: Partial<Database["public"]["Tables"]["plan_features"]["Insert"]>;
+        Relationships: [];
+      };
+      hotel_feature_overrides: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          feature_key: string;
+          enabled: boolean;
+          reason: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          feature_key: string;
+          enabled: boolean;
+          reason?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["hotel_feature_overrides"]["Insert"]>;
+        Relationships: [];
+      };
       profiles: {
         Row: {
           id: string;
@@ -127,6 +193,7 @@ export interface Database {
           hotel_id: string;
           role_id: string;
           is_active: boolean;
+          deactivated_by_suspension: boolean;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -138,6 +205,7 @@ export interface Database {
           hotel_id: string;
           role_id: string;
           is_active?: boolean;
+          deactivated_by_suspension?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["user_hotel_roles"]["Insert"]>;
         Relationships: [
@@ -1243,6 +1311,27 @@ export interface Database {
       update_room_type_capacity: {
         Args: { p_room_type_id: string; p_base_adults: number; p_max_adults: number; p_max_children: number; p_max_pets: number };
         Returns: Database["public"]["Tables"]["room_types"]["Row"];
+      // Plataforma (0039/0040).
+      has_feature: {
+        Args: { p_hotel_id: string; p_feature_key: string };
+        Returns: boolean;
+      };
+      hotel_enabled_features: {
+        Args: { p_hotel_id: string };
+        Returns: string[];
+      };
+      hotel_limit_usage: {
+        Args: { p_hotel_id: string };
+        Returns: {
+          rooms_active: number;
+          rooms_max: number | null;
+          users_active: number;
+          users_max: number | null;
+        };
+      };
+      user_has_suspended_membership: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
       };
     };
     Enums: Record<string, never>;

@@ -205,8 +205,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0036_priority_engine.sql` | `hotel_rules`, `hotel_priorities`, permiso `priorities.manage`, funciones `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` y la regla `ARRIVAL_NOT_REGISTERED` (ver sección de Motor de reglas y Prioridades) |
 | `0037_priority_engine_hardening.sql` | Endurecimiento del Motor V1: `upsert_hotel_priority()` ya no acepta severity/category/priority_score/source_module del caller; retira la política de `UPDATE` de `hotel_priorities`; agrega 5 funciones `SECURITY DEFINER` para las transiciones humanas (ver "Ajuste 02.1" en Motor de reglas y Prioridades) |
 | `0038_priority_engine_service_role_only.sql` | Cierre del Ajuste 02.1: `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` sólo ejecutables por `service_role` (`auth.role() = 'service_role'`, reemplaza el chequeo de pertenencia al hotel); `engine.ts` usa `createAdminClient()` sólo en esas dos llamadas |
-| `0039_platform_licenses.sql` | Fase 0/Plataforma (rama `feature/fase-0-plataforma`, aún no fusionada a esta rama): `hotel_licenses`, `plan_features`, `hotel_feature_overrides`, funciones `has_feature()`/`hotel_enabled_features()`/`hotel_limit_usage()`. No documentado en detalle aquí — es dueño ese trabajo, no éste. |
-| `0040_hotel_functions_membership_guard.sql` | Fase 0/Plataforma (rama `fix/fase0-security-0040`, aún no fusionada a esta rama): `assert_hotel_member()` + guard de pertenencia en las tres funciones de 0039. |
+| `0039_platform_licenses.sql` | Fase 0/Plataforma: `hotel_licenses`, `plan_features`, `hotel_feature_overrides`, funciones `has_feature()`/`hotel_enabled_features()`/`hotel_limit_usage()`/`user_has_suspended_membership()` y suspensión por desactivación de membresías (ver sección de Plataforma) |
+| `0040_hotel_functions_membership_guard.sql` | Fase 0/Plataforma: `assert_hotel_member()` + guard de pertenencia en las tres funciones de 0039. |
 | `0041_habitaciones_domain.sql` | Módulo Habitaciones: capacidad explícita aditiva en `room_types`, desactivación con motivo obligatorio en `rooms`, catálogo de amenidades + herencia con excepción (amenidades y activos), `snapshot_comercial_habitacion`, funciones `deactivate_room()`/`reactivate_room()`/`update_room_type_capacity()` (ImpactAnalysis) y `congelar_configuracion_comercial()` (ver sección Habitaciones). No depende de 0039/0040 (no toca `room_types`/`rooms`, sin colisión de nombres de tabla/función) |
 | `0042_snapshot_created_by_fix.sql` | Fix: `congelar_configuracion_comercial()` no fijaba `created_by` en el `INSERT` de `snapshot_comercial_habitacion` (quedaba siempre `NULL`) |
 | `0043_reception_readonly_functions_guard.sql` | Fix de seguridad: `can_deliver_room()`/`check_out_readiness()` (0026) eran `SECURITY DEFINER` sin validar `has_permission()` ni pertenencia al hotel -- ejecutables sin sesión y contra estancias de cualquier hotel (ver sección de Recepción) |
@@ -1188,6 +1188,50 @@ del ImpactAnalysis; reconciliar `capacity_adults`/`capacity_children`/
 `max_pets` (Habitaciones, nuevos). Ningún módulo de negocio nuevo
 (Rack/Recepción/Reservaciones) se tocó salvo el punto de integración
 explícito de `confirm.ts`.
+## Plataforma: licencias y features (Fase 0)
+
+Decisiones de modelo comercial multi-tenant:
+
+- `hotels.plan` / `hotels.status` siguen siendo la fuente comercial de
+  verdad (existentes desde `0002`). No se duplican.
+- `hotel_licenses` (1:1 con `hotels`) guarda sólo límites y fechas:
+  `rooms_max` / `users_max` (`NULL` = ilimitado), `starts_at`, `expires_at`
+  (`NULL` = sin vencimiento). Hoteles existentes se migran con límites
+  `NULL` (grandfathered) para no romper el piloto.
+- `plan_features` es el catálogo plan → feature (`PK (feature_key, plan)`).
+  Los módulos actuales (`module.reservaciones`, `module.recepcion`,
+  `module.rack`, `module.configuracion`, `module.mi_hotel_hoy`) están
+  activos en TODOS los planes al lanzar; los futuros (caja, housekeeping,
+  tarifas, CRM, mantenimiento, radar_360) diferencian planes. El piloto
+  es `basico` y debe seguir funcionando igual.
+- `hotel_feature_overrides` (gana sobre `plan_features`) permite a
+  plataforma habilitar/deshabilitar una feature puntual para un hotel
+  (ej. dar Caja a un hotel Básico por cortesía). Es la ÚNICA tabla del
+  proyecto con política de `DELETE` (el override es config derivada, no
+  dato de negocio).
+- `has_feature(hotel_id, key)`: override gana, luego plan, default false.
+  `hotel_enabled_features(hotel_id)`: plan activas ∪ override-activas
+  excepto override-desactivadas. Se consumen desde
+  `src/lib/auth/platform.ts` (`getHotelFeatures`, `assertRoomLimit`,
+  `assertUserLimit`) — nunca en el cliente.
+- Límites: se aplican en los puntos de alta (crear habitación, alta de
+  personal) vía `hotel_limit_usage()`, lanzando error legible con nombre
+  del plan. Defaults: Básico 16 cuartos/6 usuarios, Plus 40/15, Pro ∞.
+- Suspensión: `updateHotelLicense` con `status = suspended|canceled`
+  desactiva las filas de `user_hotel_roles` marcándolas
+  `deactivated_by_suspension = true`. Como `user_hotel_ids()` sólo ve
+  membresías activas, TODA la RLS existente niega acceso automáticamente
+  sin tocar ninguna política. Reactivar (trial/active) restaura sólo las
+  filas marcadas. `user_has_suspended_membership()` permite distinguir en
+  login entre "sin hotel" y "hotel suspendido" → redirect a `/suspendido`.
+- El gating de features en UI es UX, no seguridad: las Server Actions
+  siguen verificando permisos con `requirePermission()`. AppShell recibe
+  `features?: string[]` para ocultar módulos del nav.
+- `/admin` es sólo para `profiles.is_platform_admin` (verificado con
+  `is_platform_admin()` en server, no confiar del cliente). Alta de hotel:
+  crea hotel + licencia con defaults del plan + invita al dueño por email
+  (`auth.admin.inviteUserByEmail` — excepción documentada al veto de
+  `admin.ts`) + rol `hotel_admin` global.
 
 ## Fecha operativa del hotel (businessDate)
 

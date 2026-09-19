@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
+import { getHotelFeatures } from "@/lib/auth/platform";
 import { signOut } from "@/app/login/actions";
 import { formatDate } from "@/lib/format";
 import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
@@ -56,6 +57,29 @@ export default async function RackPage({
     );
   }
 
+  if (hotel.status === "suspended" || hotel.status === "canceled") redirect("/suspendido");
+
+  const features = await getHotelFeatures(hotel.hotelId);
+  if (!features.has("module.rack")) {
+    return (
+      <AppShell
+        hotelName={hotel.hotelName}
+        roleName={hotel.roleName}
+        current="rack"
+        resetHref="/rack"
+        brandColor={hotel.brandColor}
+        features={[...features]}
+      >
+        <Card className="space-y-3">
+          <CardTitle>Rack no está incluido en tu plan</CardTitle>
+          <p className="text-sm text-muted-strong">
+            Este módulo está deshabilitado para tu hotel. Contacta a Órbita 360 para actualizar tu plan.
+          </p>
+        </Card>
+      </AppShell>
+    );
+  }
+
   // Fecha operativa del hotel (su timezone, no UTC/navegador) -- ver CLAUDE.md.
   const todayIso = await getHotelBusinessDate(hotel.hotelId);
   const start = params.start && /^\d{4}-\d{2}-\d{2}$/.test(params.start) ? params.start : todayIso;
@@ -95,7 +119,15 @@ export default async function RackPage({
   const backParams = { start, days, tipo, focus };
 
   return (
-    <AppShell hotelName={hotel.hotelName} roleName={hotel.roleName} current="rack" resetHref="/rack" brandColor={hotel.brandColor} maxWidthClassName="max-w-7xl">
+    <AppShell
+      hotelName={hotel.hotelName}
+      roleName={hotel.roleName}
+      current="rack"
+      resetHref="/rack"
+      brandColor={hotel.brandColor}
+      maxWidthClassName="max-w-7xl"
+      features={[...features]}
+    >
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-foreground">Rack</h1>
       </div>

@@ -1,6 +1,7 @@
 "use server";
 
 import { requirePermission } from "@/lib/auth/permissions";
+import { assertUserLimit, planLabel } from "@/lib/auth/platform";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -67,6 +68,8 @@ export async function addStaffMember(hotelId: string, email: string, roleId: str
   });
   if (lookupError) throw lookupError;
 
+  const { data: hotel } = await supabase.from("hotels").select("plan").eq("id", hotelId).single();
+
   if (existingUserId) {
     const { data: existingRole, error: existingRoleError } = await supabase
       .from("user_hotel_roles")
@@ -79,6 +82,9 @@ export async function addStaffMember(hotelId: string, email: string, roleId: str
     if (existingRole) {
       throw new Error("Este usuario ya tiene un rol activo en este hotel. Edítalo desde la lista en vez de agregarlo de nuevo.");
     }
+
+    // Reactivar/agregar una membresía consume cupo de usuario del plan.
+    await assertUserLimit(hotelId, planLabel(hotel?.plan ?? "basico"));
 
     const { error: insertError } = await supabase
       .from("user_hotel_roles")
@@ -101,6 +107,9 @@ export async function addStaffMember(hotelId: string, email: string, roleId: str
     data: fullName ? { full_name: fullName } : undefined,
   });
   if (inviteError) throw inviteError;
+
+  // Usuario nuevo: consume cupo de usuario del plan.
+  await assertUserLimit(hotelId, planLabel(hotel?.plan ?? "basico"));
 
   const { error: insertError } = await supabase
     .from("user_hotel_roles")

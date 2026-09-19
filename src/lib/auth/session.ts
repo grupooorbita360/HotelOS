@@ -24,7 +24,7 @@ export async function getCurrentUserHotel() {
 
   const { data, error } = await supabase
     .from("user_hotel_roles")
-    .select("hotel_id, hotels(id, name, slug), roles(name)")
+    .select("hotel_id, hotels(id, name, slug, status), roles(name)")
     .eq("user_id", user.id)
     .eq("is_active", true)
     .limit(1)
@@ -44,6 +44,7 @@ export async function getCurrentUserHotel() {
     hotelId: data.hotel_id as string,
     hotelName: (data.hotels as unknown as { name: string } | null)?.name ?? "Hotel",
     roleName: (data.roles as unknown as { name: string } | null)?.name ?? null,
+    status: (data.hotels as unknown as { status?: string } | null)?.status ?? "active",
     brandColor,
   };
 }
