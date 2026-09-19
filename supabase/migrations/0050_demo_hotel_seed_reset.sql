@@ -364,7 +364,7 @@ begin
     end if;
 
     -- Captura de estancias para solicitudes/incidencias/activos (abajo)
-    if rec.folio = 1037 then v_stay_req_open := rec.stay_id; v_stay_incident_done := null; end if;
+    if rec.folio = 1037 then v_stay_req_open := rec.stay_id; end if;
     if rec.folio = 1017 then v_stay_req_done := rec.stay_id; end if;
     if rec.folio = 1038 then v_stay_incident_open := rec.stay_id; end if;
     if rec.folio = 1002 then v_stay_incident_done := rec.stay_id; end if;
@@ -411,7 +411,8 @@ begin
   end if;
 
   -- Incidencias (una abierta que bloquea el check-out de esa estancia,
-  -- una resuelta hace semanas)
+  -- una resuelta hace semanas; la estancia cerrada ya liberó la asignación,
+  -- así que se toma su única asignación histórica sin filtrar released_at)
   if v_stay_incident_open is not null then
     insert into public.stay_incidents (hotel_id, stay_id, room_id, type, severity, description, status, created_at)
     select v_hotel_id, v_stay_incident_open, ra.room_id, 'maintenance', 'medium',
@@ -424,7 +425,7 @@ begin
            'Aire acondicionado con ruido', 'resolved',
            st.checked_in_at + interval '1 day', st.checked_in_at + interval '2 hours'
     from public.stays st
-    join public.room_assignments ra on ra.stay_id = st.id and ra.released_at is null
+    join public.room_assignments ra on ra.stay_id = st.id
     where st.id = v_stay_incident_done;
   end if;
 
