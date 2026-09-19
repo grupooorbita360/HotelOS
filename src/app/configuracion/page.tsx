@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
+import { getHotelFeatures } from "@/lib/auth/platform";
 import { hasPermission } from "@/lib/auth/permissions";
 import { signOut } from "@/app/login/actions";
 import { listRoomTypes, listRooms } from "@/modules/configuracion/queries/rooms";
@@ -67,6 +68,29 @@ export default async function ConfiguracionPage({
     );
   }
 
+  if (hotel.status === "suspended" || hotel.status === "canceled") redirect("/suspendido");
+
+  const features = await getHotelFeatures(hotel.hotelId);
+  if (!features.has("module.configuracion")) {
+    return (
+      <AppShell
+        hotelName={hotel.hotelName}
+        roleName={hotel.roleName}
+        current="configuracion"
+        resetHref="/configuracion"
+        brandColor={hotel.brandColor}
+        features={[...features]}
+      >
+        <Card className="space-y-3">
+          <CardTitle>Configuración no está incluido en tu plan</CardTitle>
+          <p className="text-sm text-muted-strong">
+            Este módulo está deshabilitado para tu hotel. Contacta a Órbita 360 para actualizar tu plan.
+          </p>
+        </Card>
+      </AppShell>
+    );
+  }
+
   const [canManageSettings, canManageStaff] = await Promise.all([
     hasPermission(hotel.hotelId, "hotel.settings.manage"),
     hasPermission(hotel.hotelId, "staff.manage"),
@@ -122,6 +146,7 @@ export default async function ConfiguracionPage({
       current="configuracion"
       resetHref="/configuracion"
       brandColor={hotel.brandColor}
+      features={[...features]}
     >
       <h1 className="text-xl font-bold text-foreground">Configuración</h1>
 

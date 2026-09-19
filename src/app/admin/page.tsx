@@ -1,0 +1,335 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@/lib/auth/session";
+import { isPlatformAdmin, planLabel, FEATURE_KEYS } from "@/lib/auth/platform";
+import { signOut } from "@/app/login/actions";
+import {
+  listPlatformHotels,
+  listFeatureCatalog,
+  listFeatureOverrides,
+} from "@/modules/platform/queries/hotels";
+import { Card, CardTitle } from "@/components/ui/Card";
+import { Field, TextInput, Select } from "@/components/ui/Field";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
+import { Banner } from "@/components/ui/Banner";
+import {
+  submitCreateHotel,
+  submitUpdateHotelLicense,
+  submitSetFeatureOverride,
+  submitRemoveFeatureOverride,
+} from "./actions";
+
+const FEATURE_LABELS: Record<string, string> = {
+  "module.reservaciones": "Reservaciones",
+  "module.recepcion": "Recepción",
+  "module.rack": "Rack",
+  "module.configuracion": "Configuración",
+  "module.mi_hotel_hoy": "Mi Hotel Hoy",
+  "module.caja": "Caja",
+  "module.housekeeping": "Housekeeping",
+  "module.mantenimiento": "Mantenimiento",
+  "module.crm": "CRM",
+  "module.tarifas": "Tarifas/Revenue",
+  "module.radar_360": "Radar 360",
+};
+
+const STATUS_BADGE: Record<string, { label: string; tone: "success" | "warning" | "danger" | "neutral" | "info" }> = {
+  trial: { label: "Prueba", tone: "info" },
+  active: { label: "Activo", tone: "success" },
+  suspended: { label: "Suspendido", tone: "danger" },
+  canceled: { label: "Cancelado", tone: "neutral" },
+};
+
+const PLANS = ["basico", "plus", "pro"] as const;
+const STATUSES = ["trial", "active", "suspended", "canceled"] as const;
+
+/**
+ * Admin de plataforma (Órbita 360). Sólo is_platform_admin(); la barrera
+ * real es RLS (todas las escrituras de este módulo son platform_admin_only,
+ * ver 0039) — esto corta temprano con mensaje claro.
+ */
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string; error?: string }>;
+}) {
+  const params = await searchParams;
+  const tab = params.tab ?? "hoteles";
+
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const platformAdmin = await isPlatformAdmin();
+  if (!platformAdmin) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <Card className="max-w-lg space-y-4">
+          <CardTitle>Sin acceso</CardTitle>
+          <p className="text-sm text-muted-strong">
+            Esta área es sólo para el equipo de plataforma de HotelOS.
+          </p>
+          <form action={signOut}>
+            <Button variant="ghost">Cerrar sesión</Button>
+          </form>
+        </Card>
+      </div>
+    );
+  }
+
+  const [hotels, catalog, overrides] = await Promise.all([
+    listPlatformHotels(),
+    listFeatureCatalog(),
+    listFeatureOverrides(),
+  ]);
+
+  const overrideKey = (hotelId: string, featureKey: string) => `${hotelId}:${featureKey}`;
+  const overridesByKey = new Map(overrides.map((o) => [overrideKey(o.hotel_id, o.feature_key), o]));
+  const catalogEnabled = (featureKey: string, plan: string) =>
+    catalog.find((c) => c.feature_key === featureKey && c.plan === plan)?.enabled ?? false;
+
+  return (
+    <div className="min-h-screen bg-background px-6 py-8">
+      <div className="mx-auto max-w-5xl space-y-6 text-sm">
+        <header className="flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-brand">HotelOS · Plataforma</h1>
+            <p className="text-muted-strong">Administración de hoteles, planes y funciones.</p>
+          </div>
+          <form action={signOut}>
+            <Button variant="ghost">Cerrar sesión</Button>
+          </form>
+        </header>
+
+        <nav className="flex gap-2">
+          {[
+            { key: "hoteles", label: "Hoteles" },
+            { key: "features", label: "Funciones por plan" },
+          ].map((t) => (
+            <Link
+              key={t.key}
+              href={`/admin?tab=${t.key}`}
+              className={`rounded-lg px-4 py-2 text-sm font-medium ${
+                tab === t.key ? "bg-brand text-white" : "bg-border text-foreground hover:bg-border-strong"
+              }`}
+            >
+              {t.label}
+            </Link>
+          ))}
+        </nav>
+
+        {params.error && <Banner tone="danger">{params.error}</Banner>}
+
+        {tab === "hoteles" && (
+          <div className="space-y-6">
+            <Card className="space-y-4">
+              <CardTitle>Dar de alta un hotel</CardTitle>
+              <form action={submitCreateHotel} className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <Field label="Nombre del hotel">
+                  <TextInput name="name" required placeholder="Hotel Blue Garden" />
+                </Field>
+                <Field label="Slug (único, minúsculas)">
+                  <TextInput name="slug" required placeholder="blue-garden" />
+                </Field>
+                <Field label="Plan">
+                  <Select name="plan" defaultValue="basico">
+                    {PLANS.map((p) => (
+                      <option key={p} value={p}>{planLabel(p)}</option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Zona horaria">
+                  <TextInput name="timezone" defaultValue="America/Mexico_City" />
+                </Field>
+                <Field label="Correo del dueño">
+                  <TextInput name="ownerEmail" type="email" required placeholder="dueno@hotel.com" />
+                </Field>
+                <Field label="Nombre del dueño">
+                  <TextInput name="ownerName" placeholder="Nombre y apellido" />
+                </Field>
+                <div className="md:col-span-3">
+                  <Button type="submit">Crear hotel y enviar invitación</Button>
+                </div>
+              </form>
+              <p className="text-xs text-muted">
+                Se crea el hotel, su licencia con los límites del plan, y la política inicial. El dueño recibe
+                invitación por correo con el rol hotel_admin. Los límites por defecto: Básico 16 hab / 6 usuarios,
+                Plus 40 hab / 15 usuarios, Pro sin límite.
+              </p>
+            </Card>
+
+            <Card className="space-y-4">
+              <CardTitle>Hoteles ({hotels.length})</CardTitle>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-border text-muted-strong">
+                      <th className="py-2 pr-3">Hotel</th>
+                      <th className="py-2 pr-3">Plan</th>
+                      <th className="py-2 pr-3">Estado</th>
+                      <th className="py-2 pr-3">Habitaciones</th>
+                      <th className="py-2 pr-3">Usuarios</th>
+                      <th className="py-2 pr-3">Vencimiento</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hotels.map((h) => {
+                      const status = STATUS_BADGE[h.status] ?? { label: h.status, tone: "neutral" as const };
+                      return (
+                        <tr key={h.id} className="border-b border-border">
+                          <td className="py-2 pr-3 font-medium">{h.name}</td>
+                          <td className="py-2 pr-3">{planLabel(h.plan)}</td>
+                          <td className="py-2 pr-3"><Badge tone={status.tone}>{status.label}</Badge></td>
+                          <td className="py-2 pr-3">
+                            {h.usage?.rooms_active ?? 0} / {h.license?.rooms_max ?? "∞"}
+                          </td>
+                          <td className="py-2 pr-3">
+                            {h.usage?.users_active ?? 0} / {h.license?.users_max ?? "∞"}
+                          </td>
+                          <td className="py-2 pr-3">
+                            {h.license?.expires_at
+                              ? new Date(h.license.expires_at).toLocaleDateString("es-MX")
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="space-y-4 border-t border-border pt-4">
+                {hotels.map((h) => (
+                  <form
+                    key={h.id}
+                    action={submitUpdateHotelLicense}
+                    className="grid grid-cols-2 items-end gap-3 rounded-lg bg-background p-3 md:grid-cols-6"
+                  >
+                    <input type="hidden" name="hotelId" value={h.id} />
+                    <Field label={h.name}>
+                      <Select name="plan" defaultValue={h.plan}>
+                        {PLANS.map((p) => (
+                          <option key={p} value={p}>{planLabel(p)}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Estado">
+                      <Select name="status" defaultValue={h.status}>
+                        {STATUSES.map((s) => (
+                          <option key={s} value={s}>{STATUS_BADGE[s]?.label ?? s}</option>
+                        ))}
+                      </Select>
+                    </Field>
+                    <Field label="Máx. habitaciones (vacío = ∞)">
+                      <TextInput name="roomsMax" type="number" min={1}
+                        defaultValue={h.license?.rooms_max ?? ""} />
+                    </Field>
+                    <Field label="Máx. usuarios (vacío = ∞)">
+                      <TextInput name="usersMax" type="number" min={1}
+                        defaultValue={h.license?.users_max ?? ""} />
+                    </Field>
+                    <Field label="Vence (vacío = nunca)">
+                      <TextInput name="expiresAt" type="date"
+                        defaultValue={h.license?.expires_at?.slice(0, 10) ?? ""} />
+                    </Field>
+                    <div className="flex items-center gap-2">
+                      <TextInput name="notes" placeholder="Nota" defaultValue={h.license?.notes ?? ""} />
+                      <Button type="submit" variant="secondary" className="shrink-0">Guardar</Button>
+                    </div>
+                    <p className="col-span-2 text-xs text-muted md:col-span-6">
+                      Suspender desactiva a todo el personal del hotel (bloqueo enforcementado por RLS, no sólo por
+                      la interfaz). Reactivar restaura sólo a quienes la suspensión desactivó.
+                    </p>
+                  </form>
+                ))}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {tab === "features" && (
+          <Card className="space-y-4">
+            <CardTitle>Funciones por plan</CardTitle>
+            <p className="text-xs text-muted">
+              El catálogo plan → función vive en <code>plan_features</code> (una fila, no un deploy). Los overrides
+              por hotel se crean abajo; el override siempre gana sobre el plan.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-border text-muted-strong">
+                    <th className="py-2 pr-3">Función</th>
+                    <th className="py-2 pr-3">Básico</th>
+                    <th className="py-2 pr-3">Plus</th>
+                    <th className="py-2 pr-3">Pro</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {FEATURE_KEYS.map((key) => (
+                    <tr key={key} className="border-b border-border">
+                      <td className="py-2 pr-3 font-medium">{FEATURE_LABELS[key] ?? key}</td>
+                      {PLANS.map((p) => (
+                        <td key={p} className="py-2 pr-3">
+                          {catalogEnabled(key, p) ? "✅" : "—"}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="space-y-3 border-t border-border pt-4">
+              <h3 className="font-semibold">Overrides por hotel</h3>
+              {hotels.map((h) => (
+                <details key={h.id} className="rounded-lg bg-background p-3">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    {h.name} <span className="text-muted">({planLabel(h.plan)})</span>
+                  </summary>
+                  <div className="mt-3 space-y-2">
+                    {FEATURE_KEYS.map((key) => {
+                      const existing = overridesByKey.get(overrideKey(h.id, key));
+                      const effective = existing
+                        ? existing.enabled
+                        : catalogEnabled(key, h.plan);
+                      return (
+                        <div key={key} className="flex flex-wrap items-center gap-3 rounded border border-border px-3 py-2">
+                          <span className="w-40 font-medium">{FEATURE_LABELS[key] ?? key}</span>
+                          <Badge tone={effective ? "success" : "neutral"}>
+                            {effective ? "Encendida" : "Apagada"}
+                          </Badge>
+                          {existing && (
+                            <span className="text-xs text-muted">
+                              override: {existing.enabled ? "on" : "off"}
+                              {existing.reason ? ` · ${existing.reason}` : ""}
+                            </span>
+                          )}
+                          <form action={submitSetFeatureOverride} className="ml-auto flex items-center gap-2">
+                            <input type="hidden" name="hotelId" value={h.id} />
+                            <input type="hidden" name="featureKey" value={key} />
+                            <input type="hidden" name="enabled" value={existing?.enabled ? "off" : "on" } />
+                            <TextInput name="reason" placeholder="Motivo" className="!mt-0 w-40" />
+                            <Button type="submit" variant="secondary">
+                              {existing?.enabled ? "Apagar" : "Encender"}
+                            </Button>
+                          </form>
+                          {existing && (
+                            <form action={submitRemoveFeatureOverride}>
+                              <input type="hidden" name="hotelId" value={h.id} />
+                              <input type="hidden" name="featureKey" value={key} />
+                              <Button type="submit" variant="ghost">Quitar override</Button>
+                            </form>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}

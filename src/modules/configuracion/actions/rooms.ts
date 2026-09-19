@@ -1,6 +1,7 @@
 "use server";
 
 import { requirePermission } from "@/lib/auth/permissions";
+import { assertRoomLimit, planLabel } from "@/lib/auth/platform";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { createClient } from "@/lib/supabase/server";
 
@@ -104,7 +105,12 @@ export interface RoomInput {
 
 export async function createRoom(hotelId: string, input: RoomInput) {
   await requirePermission(hotelId, "hotel.settings.manage");
+
+  // Límite de plan: se consulta ANTES de insertar (hotel_limit_usage, 0039).
+  // NULL en rooms_max = sin límite (hoteles existentes quedaron así).
   const supabase = await createClient();
+  const { data: hotel } = await supabase.from("hotels").select("plan").eq("id", hotelId).single();
+  await assertRoomLimit(hotelId, planLabel(hotel?.plan ?? "basico"));
 
   const { data, error } = await supabase
     .from("rooms")

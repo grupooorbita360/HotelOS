@@ -20,7 +20,8 @@ export type TimelineModule =
   | "housekeeping"
   | "billing"
   | "priorities"
-  | "rooms";
+  | "rooms"
+  | "platform";
 
 export interface LogTimelineEventInput {
   hotelId: string;

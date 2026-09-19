@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
+import { getHotelFeatures } from "@/lib/auth/platform";
 import { signOut } from "@/app/login/actions";
 import { formatDate, formatDateRange, formatDateTime } from "@/lib/format";
 import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
@@ -71,6 +72,29 @@ export default async function ReservacionesPage({
     );
   }
 
+  if (hotel.status === "suspended" || hotel.status === "canceled") redirect("/suspendido");
+
+  const features = await getHotelFeatures(hotel.hotelId);
+  if (!features.has("module.reservaciones")) {
+    return (
+      <AppShell
+        hotelName={hotel.hotelName}
+        roleName={hotel.roleName}
+        current="reservaciones"
+        resetHref="/reservaciones"
+        brandColor={hotel.brandColor}
+        features={[...features]}
+      >
+        <Card className="space-y-3">
+          <CardTitle>Reservaciones no está incluido en tu plan</CardTitle>
+          <p className="text-sm text-muted-strong">
+            Este módulo está deshabilitado para tu hotel. Contacta a Órbita 360 para actualizar tu plan.
+          </p>
+        </Card>
+      </AppShell>
+    );
+  }
+
   const roomTypes = await listRoomTypes(hotel.hotelId);
   const reservations = await listReservations(hotel.hotelId);
   const leads = await listLeads(hotel.hotelId);
@@ -122,6 +146,7 @@ export default async function ReservacionesPage({
       current="reservaciones"
       resetHref="/reservaciones"
       brandColor={hotel.brandColor}
+      features={[...features]}
     >
       <h1 className="text-xl font-bold text-foreground">Reservaciones</h1>
 
