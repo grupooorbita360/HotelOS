@@ -7,6 +7,7 @@ import {
   updateHotelLicense,
   setFeatureOverride,
   removeFeatureOverride,
+  resetDemoHotel,
 } from "@/modules/platform/actions/hotels";
 
 function tabUrl(tab: string, extra = "") {
@@ -14,14 +15,16 @@ function tabUrl(tab: string, extra = "") {
 }
 
 async function runOrError(tab: string, fn: () => Promise<unknown>) {
+  let successMsg = "";
   try {
-    await fn();
+    const result = await fn();
+    if (typeof result === "string") successMsg = result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Error desconocido";
     redirect(tabUrl(tab, `&error=${encodeURIComponent(message)}`));
   }
   revalidatePath("/admin");
-  redirect(tabUrl(tab));
+  redirect(tabUrl(tab, successMsg ? `&msg=${encodeURIComponent(successMsg)}` : ""));
 }
 
 function nullableNum(formData: FormData, key: string): number | null {
@@ -80,4 +83,15 @@ export async function submitRemoveFeatureOverride(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const featureKey = String(formData.get("featureKey"));
   await runOrError("features", () => removeFeatureOverride(hotelId, featureKey));
+}
+
+export async function submitResetDemoHotel(formData: FormData) {
+  if (formData.get("confirm") !== "on") {
+    redirect(tabUrl("demo", `&error=${encodeURIComponent("Marca la confirmación para reiniciar la demo.")}`));
+  }
+  await runOrError("demo", async () => {
+    const r = await resetDemoHotel();
+    return `Demo reiniciada: ${r.stays_created} estancias, ${r.reservations_created} reservaciones, ` +
+      `${r.transactions_created} transacciones y ${r.timeline_events_created} eventos de timeline.`;
+  });
 }
