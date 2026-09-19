@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import {
   createHotel,
+  updateHotel,
   updateHotelLicense,
   assignHotelOwner,
   resendOwnerInvite,
@@ -47,6 +48,16 @@ export async function submitCreateHotel(formData: FormData) {
       timezone: String(formData.get("timezone") || "America/Mexico_City"),
       ownerEmail: String(formData.get("ownerEmail")),
       ownerName: String(formData.get("ownerName") || "") || undefined,
+    }),
+  );
+}
+
+export async function submitUpdateHotel(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  await runOrError("hoteles", () =>
+    updateHotel(hotelId, {
+      name: String(formData.get("name")),
+      timezone: String(formData.get("timezone") || "America/Mexico_City"),
     }),
   );
 }

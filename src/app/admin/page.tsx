@@ -7,6 +7,8 @@ import {
   listPlatformHotels,
   listFeatureCatalog,
   listFeatureOverrides,
+  listPlatformAuditEvents,
+  type PlatformAuditRow,
 } from "@/modules/platform/queries/hotels";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
@@ -15,6 +17,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Banner } from "@/components/ui/Banner";
 import {
   submitCreateHotel,
+  submitUpdateHotel,
   submitUpdateHotelLicense,
   submitAssignHotelOwner,
   submitResendOwnerInvite,
@@ -45,6 +48,45 @@ const STATUS_BADGE: Record<string, { label: string; tone: "success" | "warning" 
 
 const PLANS = ["basico", "plus", "pro"] as const;
 const STATUSES = ["trial", "active", "suspended", "canceled"] as const;
+
+const AUDIT_EVENT_LABELS: Record<string, string> = {
+  "hotel.created": "Hotel creado",
+  "hotel.updated": "Datos del hotel editados",
+  "hotel.owner_assigned": "Dueño asignado",
+  "hotel.license_updated": "Licencia actualizada",
+  "hotel.feature_override_set": "Feature override fijado",
+  "hotel.feature_override_removed": "Feature override quitado",
+};
+
+/** Resumen legible del payload de cada evento de plataforma. */
+function auditDetail(eventType: string, payload: Record<string, unknown>): string {
+  const str = (v: unknown) => (v == null || v === "" ? null : String(v));
+  const limit = (v: unknown) => (v == null ? "∞" : String(v));
+  switch (eventType) {
+    case "hotel.created": {
+      const invited = payload.owner_invited === true;
+      return `plan ${str(payload.plan) ?? "?"} · dueño ${str(payload.owner_email) ?? "?"}${invited ? " (invitado)" : " (cuenta existente)"}`;
+    }
+    case "hotel.updated":
+      return `nombre "${str(payload.name) ?? "?"}" · timezone ${str(payload.timezone) ?? "?"}`;
+    case "hotel.owner_assigned": {
+      const invited = payload.owner_invited === true;
+      return `dueño ${str(payload.owner_email) ?? "?"}${invited ? " (invitado)" : " (cuenta existente)"}`;
+    }
+    case "hotel.license_updated":
+      return (
+        `plan ${str(payload.plan) ?? "?"} · ${STATUS_BADGE[str(payload.status) ?? ""]?.label ?? str(payload.status) ?? "?"}` +
+        ` · hab ${limit(payload.rooms_max)} · usuarios ${limit(payload.users_max)}` +
+        ` · vence ${str(payload.expires_at) ?? "nunca"}`
+      );
+    case "hotel.feature_override_set":
+      return `${str(payload.feature_key) ?? "?"} → ${payload.enabled ? "encendida" : "apagada"}${str(payload.reason) ? ` · "${str(payload.reason)}"` : ""}`;
+    case "hotel.feature_override_removed":
+      return `${str(payload.feature_key) ?? "?"}`;
+    default:
+      return JSON.stringify(payload);
+  }
+}
 
 /**
  * Admin de plataforma (Órbita 360). Sólo is_platform_admin(); la barrera
@@ -79,10 +121,11 @@ export default async function AdminPage({
     );
   }
 
-  const [hotels, catalog, overrides] = await Promise.all([
+  const [hotels, catalog, overrides, auditEvents] = await Promise.all([
     listPlatformHotels(),
     listFeatureCatalog(),
     listFeatureOverrides(),
+    tab === "auditoria" ? listPlatformAuditEvents() : Promise.resolve([] as PlatformAuditRow[]),
   ]);
 
   const overrideKey = (hotelId: string, featureKey: string) => `${hotelId}:${featureKey}`;
@@ -104,14 +147,11 @@ export default async function AdminPage({
         </header>
 
         <nav className="flex gap-2">
-          {[{
-            key: "hoteles",
-            label: "Hoteles",
-          },
-          {
-            key: "features",
-            label: "Funciones por plan",
-          }].map((t) => (
+          {[
+            { key: "hoteles", label: "Hoteles" },
+            { key: "features", label: "Funciones por plan" },
+            { key: "auditoria", label: "Auditoría" },
+          ].map((t) => (
             <Link
               key={t.key}
               href={`/admin?tab=${t.key}`}
@@ -202,10 +242,20 @@ export default async function AdminPage({
                           <td className="py-2 pr-3">{planLabel(h.plan)}</td>
                           <td className="py-2 pr-3"><Badge tone={status.tone}>{status.label}</Badge></td>
                           <td className="py-2 pr-3">
-                            {h.usage?.rooms_active ?? 0} / {h.license?.rooms_max ?? "∞"}
+                            <span className={h.license?.rooms_max != null && (h.usage?.rooms_active ?? 0) >= h.license.rooms_max ? "font-semibold text-danger" : ""}>
+                              {h.usage?.rooms_active ?? 0} / {h.license?.rooms_max ?? "∞"}
+                            </span>
+                            {h.license?.rooms_max != null && (h.usage?.rooms_active ?? 0) >= h.license.rooms_max && (
+                              <span className="ml-2 inline-block rounded-full bg-danger-soft px-2 py-0.5 text-[10px] font-semibold text-danger">al límite</span>
+                            )}
                           </td>
                           <td className="py-2 pr-3">
-                            {h.usage?.users_active ?? 0} / {h.license?.users_max ?? "∞"}
+                            <span className={h.license?.users_max != null && (h.usage?.users_active ?? 0) >= h.license.users_max ? "font-semibold text-danger" : ""}>
+                              {h.usage?.users_active ?? 0} / {h.license?.users_max ?? "∞"}
+                            </span>
+                            {h.license?.users_max != null && (h.usage?.users_active ?? 0) >= h.license.users_max && (
+                              <span className="ml-2 inline-block rounded-full bg-danger-soft px-2 py-0.5 text-[10px] font-semibold text-danger">al límite</span>
+                            )}
                           </td>
                           <td className="py-2 pr-3">
                             {h.license?.expires_at
@@ -223,8 +273,27 @@ export default async function AdminPage({
                 {hotels.map((h) => (
                 <div key={h.id} className="rounded-lg bg-background p-3">
                   <form
+                    action={submitUpdateHotel}
+                    className="grid grid-cols-2 items-end gap-3 md:grid-cols-3"
+                  >
+                    <input type="hidden" name="hotelId" value={h.id} />
+                    <Field label={`Datos · ${h.slug}`}>
+                      <TextInput name="name" required defaultValue={h.name} />
+                    </Field>
+                    <Field label="Zona horaria (IANA)">
+                      <TextInput name="timezone" defaultValue={h.timezone} placeholder="America/Mexico_City" />
+                    </Field>
+                    <div className="flex items-center gap-2">
+                      <Button type="submit" variant="secondary" className="shrink-0">Guardar datos</Button>
+                      <span className="text-xs text-muted">
+                        Nombre y timezone. El plan se edita abajo, en la licencia.
+                      </span>
+                    </div>
+                  </form>
+
+                  <form
                     action={submitUpdateHotelLicense}
-                    className="grid grid-cols-2 items-end gap-3 md:grid-cols-6"
+                    className="mt-3 grid grid-cols-2 items-end gap-3 border-t border-border pt-3 md:grid-cols-6"
                   >
                     <input type="hidden" name="hotelId" value={h.id} />
                     <Field label={h.name}>
@@ -374,6 +443,49 @@ export default async function AdminPage({
                 </details>
               ))}
             </div>
+          </Card>
+        )}
+
+        {tab === "auditoria" && (
+          <Card className="space-y-4">
+            <CardTitle>Auditoría de plataforma</CardTitle>
+            <p className="text-xs text-muted">
+              Acciones del equipo de plataforma sobre hoteles (altas, ediciones, licencias, dueños y
+              overrides), leídas de <code>timeline_events</code> — la misma bitácora append-only que usa
+              el resto del sistema, sin tabla nueva.
+            </p>
+            {auditEvents.length === 0 ? (
+              <p className="text-sm text-muted">Todavía no hay eventos de plataforma registrados.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-border text-muted-strong">
+                      <th className="py-2 pr-3">Fecha</th>
+                      <th className="py-2 pr-3">Actor</th>
+                      <th className="py-2 pr-3">Hotel</th>
+                      <th className="py-2 pr-3">Acción</th>
+                      <th className="py-2 pr-3">Detalle</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditEvents.map((e) => (
+                      <tr key={e.id} className="border-b border-border align-top">
+                        <td className="whitespace-nowrap py-2 pr-3 text-muted">
+                          {new Date(e.occurred_at).toLocaleString("es-MX")}
+                        </td>
+                        <td className="py-2 pr-3">{e.actor_email ?? "—"}</td>
+                        <td className="py-2 pr-3 font-medium">{e.hotel_name ?? e.hotel_id}</td>
+                        <td className="whitespace-nowrap py-2 pr-3">
+                          {AUDIT_EVENT_LABELS[e.event_type] ?? e.event_type}
+                        </td>
+                        <td className="py-2 pr-3 text-muted-strong">{auditDetail(e.event_type, e.payload)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </Card>
         )}
       </div>

@@ -1,6 +1,7 @@
 "use server";
 
 import { requirePlatformAdmin, PLAN_DEFAULT_LIMITS, assertUserLimit, planLabel } from "@/lib/auth/platform";
+import { computeZonedEndOfDay, isValidTimezone } from "@/lib/businessDate";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -148,6 +149,50 @@ export async function createHotel(input: CreateHotelInput) {
   return { hotelId: hotel.id, ownerInvited: owner.invited };
 }
 
+export interface UpdateHotelInput {
+  name: string;
+  timezone: string;
+}
+
+/**
+ * Edita los datos básicos de un hotel existente (nombre y zona horaria).
+ * El plan NO se edita aquí: vive en la licencia (updateHotelLicense), que
+ * además dispara la cascada de suspensión/reactivación. El slug no es
+ * editable: se usa como identificador legible desde el alta.
+ */
+export async function updateHotel(hotelId: string, input: UpdateHotelInput) {
+  await requirePlatformAdmin();
+
+  const name = input.name.trim();
+  if (!name) throw new Error("El nombre del hotel no puede quedar vacío.");
+
+  const timezone = input.timezone.trim() || "America/Mexico_City";
+  if (!isValidTimezone(timezone)) {
+    throw new Error(`"${timezone}" no es una zona horaria IANA válida (ej. America/Mexico_City).`);
+  }
+
+  const supabase = await createClient();
+
+  // RLS: hotels_update_settings_manager_or_platform_admin (0006) — la
+  // ruta platform_admin la cubre; el refuerzo de UX ya corrió arriba.
+  const { data: hotel, error } = await supabase
+    .from("hotels")
+    .update({ name, timezone })
+    .eq("id", hotelId)
+    .select("name")
+    .single();
+  if (error) throw error;
+
+  await logTimelineEvent({
+    hotelId,
+    module: "platform",
+    eventType: "hotel.updated",
+    entityType: "hotel",
+    entityId: hotelId,
+    payload: { name: hotel.name, timezone },
+  });
+}
+
 export interface AssignHotelOwnerInput {
   ownerEmail: string;
   ownerName?: string;
@@ -269,6 +314,15 @@ export async function updateHotelLicense(hotelId: string, input: UpdateHotelLice
 
   const supabase = await createClient();
 
+  // El timezone se necesita para fijar el vencimiento a fin del día en la
+  // fecha del HOTEL (fix M-3): 23:59:59.999 America/Mexico_City, no UTC.
+  const { data: hotel, error: hotelReadError } = await supabase
+    .from("hotels")
+    .select("timezone")
+    .eq("id", hotelId)
+    .single();
+  if (hotelReadError) throw hotelReadError;
+
   const { error: hotelError } = await supabase
     .from("hotels")
     .update({ plan: input.plan, status: input.status })
@@ -280,7 +334,7 @@ export async function updateHotelLicense(hotelId: string, input: UpdateHotelLice
     .update({
       rooms_max: input.roomsMax,
       users_max: input.usersMax,
-      expires_at: input.expiresAt ? `${input.expiresAt}T23:59:59Z` : null,
+      expires_at: input.expiresAt ? computeZonedEndOfDay(hotel.timezone, input.expiresAt).toISOString() : null,
       notes: input.notes || null,
     })
     .eq("hotel_id", hotelId);

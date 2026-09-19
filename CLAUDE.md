@@ -1227,6 +1227,21 @@ Decisiones de modelo comercial multi-tenant:
 - El gating de features en UI es UX, no seguridad: las Server Actions
   siguen verificando permisos con `requirePermission()`. AppShell recibe
   `features?: string[]` para ocultar módulos del nav.
+- **Patrón para enforcement server-side de features (cuando un módulo
+  diferencie planes — el primer caso será Caja):** cada Server Action
+  nueva que pertenezca a una feature conmutable debe verificarla ANTES de
+  ejecutar, llamando a `has_feature(hotelId, 'module.<x>')` en Postgres
+  (vía RPC, igual que `getHotelFeatures()` en `src/lib/auth/platform.ts`)
+  y abortando con error legible tipo `FEATURE_NOT_ENABLED: module.<x> no
+  está incluido en tu plan` si regresa false. El chequeo va en la action,
+  no en el componente (el cliente puede saltarse cualquier gate de UI), y
+  por sesión/hotel justo antes de la mutación, no cacheado al entrar al
+  módulo — un override puede encenderse/apagarse en cualquier momento.
+  Las features activas en TODOS los planes desde el lanzamiento
+  (`module.reservaciones`, `module.recepcion`, `module.rack`,
+  `module.configuracion`, `module.mi_hotel_hoy`) NO llevan este chequeo:
+  es ruido para lo que hoy no puede estar apagado. El patrón aplica a
+  partir de la primera feature que realmente diferencie planes.
 - `/admin` es sólo para `profiles.is_platform_admin` (verificado con
   `is_platform_admin()` en server, no confiar del cliente). Alta de hotel:
   PRIMERO se resuelve al dueño —si el correo ya tiene cuenta se vincula

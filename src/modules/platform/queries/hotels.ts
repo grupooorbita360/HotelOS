@@ -130,3 +130,72 @@ export async function listFeatureOverrides(): Promise<FeatureOverrideRow[]> {
   if (error) throw error;
   return (data ?? []) as FeatureOverrideRow[];
 }
+
+export interface PlatformAuditRow {
+  id: string;
+  occurred_at: string;
+  event_type: string;
+  hotel_id: string;
+  hotel_name: string | null;
+  actor_email: string | null;
+  payload: Record<string, unknown>;
+}
+
+const AUDIT_EVENT_TYPES = [
+  "hotel.created",
+  "hotel.updated",
+  "hotel.owner_assigned",
+  "hotel.license_updated",
+  "hotel.feature_override_set",
+  "hotel.feature_override_removed",
+];
+
+/**
+ * Bitácora de acciones de plataforma (las que loguea module = 'platform' en
+ * timeline_events), más recientes primero. No crea tabla nueva: la fuente
+ * ya existe y es append-only (0008). La RLS ya permite a platform_admin leer
+ * timeline de cualquier hotel; los eventos de plataforma además se filtran
+ * por event_type para no mezclar ruido operativo de los hoteles.
+ */
+export async function listPlatformAuditEvents(limit = 200): Promise<PlatformAuditRow[]> {
+  const supabase = await createClient();
+  const { data: events, error } = await supabase
+    .from("timeline_events")
+    .select("id, occurred_at, event_type, hotel_id, actor_user_id, payload")
+    .eq("module", "platform")
+    .in("event_type", AUDIT_EVENT_TYPES)
+    .order("occurred_at", { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+
+  // Nombres de hotel y correos del actor en una pasada cada uno (mismo
+  // patrón que dueños en listPlatformHotels).
+  const hotelIds = [...new Set((events ?? []).map((e) => e.hotel_id))];
+  const actorIds = [
+    ...new Set((events ?? []).map((e) => e.actor_user_id).filter((id): id is string => id != null)),
+  ];
+
+  const hotelNames = new Map<string, string>();
+  if (hotelIds.length > 0) {
+    const { data: hotels } = await supabase.from("hotels").select("id, name").in("id", hotelIds);
+    for (const h of hotels ?? []) hotelNames.set(h.id, h.name);
+  }
+
+  const actorEmails = new Map<string, string>();
+  if (actorIds.length > 0) {
+    const { data: profiles } = await supabase.from("profiles").select("id, email").in("id", actorIds);
+    for (const p of profiles ?? []) {
+      if (p.email) actorEmails.set(p.id, p.email);
+    }
+  }
+
+  return (events ?? []).map((e) => ({
+    id: e.id,
+    occurred_at: e.occurred_at,
+    event_type: e.event_type,
+    hotel_id: e.hotel_id,
+    hotel_name: hotelNames.get(e.hotel_id) ?? null,
+    actor_email: e.actor_user_id ? (actorEmails.get(e.actor_user_id) ?? null) : null,
+    payload: (e.payload ?? {}) as Record<string, unknown>,
+  }));
+}
