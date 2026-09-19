@@ -1,9 +1,59 @@
 "use server";
 
-import { requirePlatformAdmin, PLAN_DEFAULT_LIMITS } from "@/lib/auth/platform";
+import { requirePlatformAdmin, PLAN_DEFAULT_LIMITS, assertUserLimit, planLabel } from "@/lib/auth/platform";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+
+type ServerSupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * Busca una cuenta existente por correo vía profiles (RLS permite a
+ * platform_admin leer todos los perfiles, 0006). profiles.email es copia
+ * sincronizada por trigger de auth.users (0030), así que cubre también a
+ * usuarios invitados que aún no aceptaron.
+ */
+async function findUserIdByEmail(supabase: ServerSupabaseClient, email: string): Promise<string | null> {
+  const { data, error } = await supabase.from("profiles").select("id").eq("email", email).maybeSingle();
+  if (error) throw error;
+  return data?.id ?? null;
+}
+
+/** Mensaje legible para el fallo típico de inviteUserByEmail. */
+function inviteFailureMessage(error: unknown): Error {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/rate limit/i.test(raw)) {
+    return new Error(
+      "No se pudo enviar la invitación: Supabase limita los correos por hora y se alcanzó el máximo. " +
+        "No se creó nada. Espera ~1 hora y reintenta, o crea el usuario desde el dashboard de Supabase " +
+        "(Authentication → Users → Add user → Create new user y marca Auto Confirm) y repite la acción " +
+        "con el mismo correo para vincularlo.",
+    );
+  }
+  return new Error(`No se pudo enviar la invitación (${raw}). No se creó nada; revisa el correo e inténtalo de nuevo.`);
+}
+
+/**
+ * Devuelve el user_id del dueño: vincula la cuenta existente o invita.
+ * La invitación es lo ÚNICO que usa el client admin (misma excepción
+ * documentada que staff.ts); las escrituras las hace el caller con el
+ * cliente normal (RLS).
+ */
+async function findOrInviteOwner(
+  supabase: ServerSupabaseClient,
+  email: string,
+  fullName?: string,
+): Promise<{ userId: string; invited: boolean }> {
+  const existing = await findUserIdByEmail(supabase, email);
+  if (existing) return { userId: existing, invited: false };
+
+  const adminClient = createAdminClient();
+  const { data: invited, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
+    data: fullName ? { full_name: fullName } : undefined,
+  });
+  if (error) throw inviteFailureMessage(error);
+  return { userId: invited.user.id, invited: true };
+}
 
 /**
  * Acciones del admin de plataforma (/admin, staff de Órbita 360).
@@ -33,8 +83,14 @@ export async function createHotel(input: CreateHotelInput) {
 
   const supabase = await createClient();
   const normalizedEmail = input.ownerEmail.trim().toLowerCase();
+  const ownerName = input.ownerName?.trim() || undefined;
 
-  // 1. Hotel (RLS: insert platform_admin_only).
+  // 1. Dueño ANTES que el hotel: si la invitación falla (p. ej. el rate
+  //    limit de correos de Supabase) NO queda hotel huérfano (issue #5).
+  //    Si el correo ya tiene cuenta, se vincula sin enviar nada.
+  const owner = await findOrInviteOwner(supabase, normalizedEmail, ownerName);
+
+  // 2. Hotel (RLS: insert platform_admin_only).
   const { data: hotel, error: hotelError } = await supabase
     .from("hotels")
     .insert({
@@ -50,7 +106,7 @@ export async function createHotel(input: CreateHotelInput) {
 
   // hotel_policies y reception_settings se crean solos por trigger (0007/0020).
 
-  // 2. Licencia con los límites por defecto del plan (NULL = sin límite).
+  // 3. Licencia con los límites por defecto del plan (NULL = sin límite).
   const defaults = PLAN_DEFAULT_LIMITS[input.plan];
   const { error: licenseError } = await supabase.from("hotel_licenses").insert({
     hotel_id: hotel.id,
@@ -60,13 +116,7 @@ export async function createHotel(input: CreateHotelInput) {
   });
   if (licenseError) throw licenseError;
 
-  // 3. Owner: si ya tiene cuenta se vincula; si no, se invita.
-  const { data: existingUserId, error: lookupError } = await supabase.rpc("find_user_id_by_email", {
-    p_hotel_id: hotel.id,
-    p_email: normalizedEmail,
-  });
-  if (lookupError) throw lookupError;
-
+  // 4. Membresía hotel_admin del dueño.
   const { data: adminRole, error: roleError } = await supabase
     .from("roles")
     .select("id")
@@ -75,23 +125,8 @@ export async function createHotel(input: CreateHotelInput) {
     .single();
   if (roleError) throw roleError;
 
-  let ownerUserId: string;
-  let ownerInvited = false;
-
-  if (existingUserId) {
-    ownerUserId = existingUserId as string;
-  } else {
-    const adminClient = createAdminClient();
-    const { data: invited, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(normalizedEmail, {
-      data: input.ownerName ? { full_name: input.ownerName } : undefined,
-    });
-    if (inviteError) throw inviteError;
-    ownerUserId = invited.user.id;
-    ownerInvited = true;
-  }
-
   const { error: memberError } = await supabase.from("user_hotel_roles").insert({
-    user_id: ownerUserId,
+    user_id: owner.userId,
     hotel_id: hotel.id,
     role_id: adminRole.id,
   });
@@ -106,11 +141,118 @@ export async function createHotel(input: CreateHotelInput) {
     payload: {
       plan: input.plan,
       owner_email: normalizedEmail,
-      owner_invited: ownerInvited,
+      owner_invited: owner.invited,
     },
   });
 
-  return { hotelId: hotel.id, ownerInvited };
+  return { hotelId: hotel.id, ownerInvited: owner.invited };
+}
+
+export interface AssignHotelOwnerInput {
+  ownerEmail: string;
+  ownerName?: string;
+}
+
+/**
+ * Asigna (o reasigna) el dueño de un hotel existente. Cubre los dos casos:
+ * correo con cuenta (se vincula) o sin cuenta (se invita). También sirve de
+ * reintento para hoteles dados de alta cuando el invite falló (issue #5) y
+ * para hoteles huérfanos creados antes de este fix (issue #2).
+ */
+export async function assignHotelOwner(hotelId: string, input: AssignHotelOwnerInput) {
+  await requirePlatformAdmin();
+
+  const supabase = await createClient();
+  const normalizedEmail = input.ownerEmail.trim().toLowerCase();
+  const ownerName = input.ownerName?.trim() || undefined;
+
+  const { data: adminRole, error: roleError } = await supabase
+    .from("roles")
+    .select("id")
+    .eq("name", "hotel_admin")
+    .is("hotel_id", null)
+    .single();
+  if (roleError) throw roleError;
+
+  // ¿Ya es dueño activo de ESTE hotel? (idempotencia + mensaje claro)
+  const alreadyOwnerId = await findUserIdByEmail(supabase, normalizedEmail);
+  if (alreadyOwnerId) {
+    const { data: activeMembership, error: activeError } = await supabase
+      .from("user_hotel_roles")
+      .select("id")
+      .eq("hotel_id", hotelId)
+      .eq("user_id", alreadyOwnerId)
+      .eq("role_id", adminRole.id)
+      .eq("is_active", true)
+      .maybeSingle();
+    if (activeError) throw activeError;
+    if (activeMembership) {
+      throw new Error("Ese correo ya es dueño activo de este hotel.");
+    }
+  }
+
+  const owner = await findOrInviteOwner(supabase, normalizedEmail, ownerName);
+
+  // Cuenta nueva: consume cupo de usuarios del plan.
+  if (owner.invited) {
+    const { data: hotel } = await supabase.from("hotels").select("plan").eq("id", hotelId).single();
+    await assertUserLimit(hotelId, planLabel(hotel?.plan ?? "basico"));
+  }
+
+  // ¿Tenía membresía previa (desactivada)? Se reactiva; si no, se inserta.
+  const { data: priorMembership, error: priorError } = await supabase
+    .from("user_hotel_roles")
+    .select("id")
+    .eq("hotel_id", hotelId)
+    .eq("user_id", owner.userId)
+    .eq("role_id", adminRole.id)
+    .maybeSingle();
+  if (priorError) throw priorError;
+
+  if (priorMembership) {
+    const { error: reactivateError } = await supabase
+      .from("user_hotel_roles")
+      .update({ is_active: true, deactivated_by_suspension: false })
+      .eq("id", priorMembership.id);
+    if (reactivateError) throw reactivateError;
+  } else {
+    const { error: insertError } = await supabase.from("user_hotel_roles").insert({
+      user_id: owner.userId,
+      hotel_id: hotelId,
+      role_id: adminRole.id,
+    });
+    if (insertError) throw insertError;
+  }
+
+  await logTimelineEvent({
+    hotelId,
+    module: "platform",
+    eventType: "hotel.owner_assigned",
+    entityType: "hotel",
+    entityId: hotelId,
+    payload: {
+      owner_email: normalizedEmail,
+      owner_invited: owner.invited,
+    },
+  });
+}
+
+/**
+ * Reenvía la invitación a un dueño que aún no aceptó. Si el correo ya
+ * completó su registro, no hay nada que reenviar: entra con su contraseña.
+ */
+export async function resendOwnerInvite(ownerEmail: string) {
+  await requirePlatformAdmin();
+
+  const normalizedEmail = ownerEmail.trim().toLowerCase();
+  const adminClient = createAdminClient();
+  const { error } = await adminClient.auth.admin.inviteUserByEmail(normalizedEmail, {});
+  if (error) {
+    if (/already/i.test(error.message ?? "")) {
+      throw new Error("Ese correo ya completó su registro: no necesita invitación, puede entrar con su contraseña.");
+    }
+    throw inviteFailureMessage(error);
+  }
 }
 
 export interface UpdateHotelLicenseInput {
