@@ -221,3 +221,50 @@ export async function removeFeatureOverride(hotelId: string, featureKey: string)
     payload: { feature_key: featureKey },
   });
 }
+
+export interface ResetDemoResult {
+  hotel_id: string;
+  hotel_slug: string;
+  stays_created: number;
+  reservations_created: number;
+  transactions_created: number;
+  timeline_events_created: number;
+  reset_at: string;
+}
+
+/**
+ * Regenera el Hotel Demo (slug 'hotel-demo') con ~7 semanas de historial.
+ *
+ * El borrado + seed corre dentro de la función reset_demo_hotel() (0050):
+ * atómico, idempotente y con guard de platform_admin a nivel de base
+ * (is_platform_admin() lee auth.uid() del JWT — este RPC va con la sesión
+ * del admin, nunca con service role, para que el guard tenga sentido).
+ *
+ * Decisión deliberada: NO hay reset automático/cron en esta fase. Es un
+ * botón manual en /admin (tab "Demo"); el cron se activará cuando la demo
+ * sea pública.
+ */
+export async function resetDemoHotel(): Promise<ResetDemoResult> {
+  await requirePlatformAdmin();
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("reset_demo_hotel");
+  if (error) throw error;
+
+  const result = data as ResetDemoResult;
+
+  await logTimelineEvent({
+    hotelId: result.hotel_id,
+    module: "platform",
+    eventType: "demo.reset_requested",
+    entityType: "hotel",
+    entityId: result.hotel_id,
+    payload: {
+      stays: result.stays_created,
+      reservations: result.reservations_created,
+      transactions: result.transactions_created,
+    },
+  });
+
+  return result;
+}
