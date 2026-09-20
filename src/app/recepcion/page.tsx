@@ -85,6 +85,11 @@ export default async function RecepcionPage({
 
   const detail = params.stayId ? await getStayDetails(hotel.hotelId, params.stayId) : null;
 
+  // Estado de cuenta -- Saldo siempre viene de stay_accounts.balance (fuente
+  // real); Hospedaje/Extras/Pagado son un desglose informativo derivado de
+  // datos ya cargados, nunca recalculan el saldo mostrado.
+  const rateTotal = Number(detail?.stay.reservation_stays?.rate_total ?? 0);
+
   const needsRoomOptions =
     !!detail &&
     !detail.activeAssignment &&
@@ -100,18 +105,18 @@ export default async function RecepcionPage({
           ),
         )
       : 1;
+  // La tarifa POR NOCHE realmente vendida -- no room_types.base_rate, que
+  // puede haberse editado en Configuración después de confirmar esta
+  // reserva (auditoría de precio, Tier 1, ver CLAUDE.md).
+  const soldNightlyRate = rateTotal / nights;
   const roomOptions = needsRoomOptions
-    ? await listRoomAssignmentOptions(hotel.hotelId, detail!.stay.reservation_stays!.room_type_id, nights)
+    ? await listRoomAssignmentOptions(hotel.hotelId, detail!.stay.reservation_stays!.room_type_id, nights, soldNightlyRate)
     : [];
   const equivalentOptions = roomOptions.filter((o) => o.kind === "equivalente");
   const upgradeOptions = roomOptions.filter((o) => o.kind === "upgrade");
 
   const checkinAssets = detail ? await getHotelCheckinAssets(hotel.hotelId) : [];
 
-  // Estado de cuenta -- Saldo siempre viene de stay_accounts.balance (fuente
-  // real); Hospedaje/Extras/Pagado son un desglose informativo derivado de
-  // datos ya cargados, nunca recalculan el saldo mostrado.
-  const rateTotal = Number(detail?.stay.reservation_stays?.rate_total ?? 0);
   const extrasCharged = detail
     ? detail.transactions.filter((t) => t.type === "charge").reduce((sum, t) => sum + Number(t.amount), 0)
     : 0;

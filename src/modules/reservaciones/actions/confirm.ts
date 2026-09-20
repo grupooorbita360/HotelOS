@@ -11,7 +11,6 @@ export interface ConfirmReservationInput {
   primaryGuestEmail?: string;
   primaryGuestPhone?: string;
   channel?: string;
-  rateTotal?: number;
   adults?: number;
   children?: number;
   hasPets?: boolean;
@@ -23,6 +22,12 @@ export interface ConfirmReservationInput {
  * nunca lo que lo crea. Este MVP registra la confirmación directamente
  * (garantía/pago real se añaden con actions/guarantee.ts y
  * actions/payment.ts sobre la reserva ya confirmada).
+ *
+ * rate_total ya no se recibe como parámetro (auditoría de precio, Tier 1,
+ * ver CLAUDE.md): confirm_reservation_from_hold() (0047) lo deriva siempre
+ * de quote_options.total a través de inventory_holds.quote_option_id del
+ * mismo Hold que se está confirmando -- nunca de un valor que este Server
+ * Action pudiera reenviar.
  */
 export async function confirmReservation(input: ConfirmReservationInput) {
   await requirePermission(input.hotelId, "reservations.create");
@@ -34,7 +39,6 @@ export async function confirmReservation(input: ConfirmReservationInput) {
     p_primary_guest_email: input.primaryGuestEmail ?? null,
     p_primary_guest_phone: input.primaryGuestPhone ?? null,
     p_channel: input.channel ?? "direct",
-    p_rate_total: input.rateTotal ?? 0,
     p_adults: input.adults ?? 1,
     p_children: input.children ?? 0,
     p_has_pets: input.hasPets ?? false,

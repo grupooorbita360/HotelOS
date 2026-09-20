@@ -5,25 +5,17 @@ import { createQuote } from "@/modules/reservaciones/actions/quote";
 import { createHoldFromQuoteOption, releaseHold } from "@/modules/reservaciones/actions/hold";
 import { confirmReservation, cancelReservation } from "@/modules/reservaciones/actions/confirm";
 import { registerPayment } from "@/modules/reservaciones/actions/payment";
-import { getHotelIvaPorcentaje } from "@/modules/reservaciones/queries/policies";
-import { calculateTaxBreakdown } from "@/lib/tax";
 
 export async function submitSearchAndQuote(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
-  const nightlyRate = Number(formData.get("nightlyRate"));
-  const checkIn = String(formData.get("checkIn"));
-  const checkOut = String(formData.get("checkOut"));
-  const nights = Math.max(
-    1,
-    Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / (1000 * 60 * 60 * 24)),
-  );
-
-  // nightlyRate ya es el precio final por noche, IVA incluido -- el monto
-  // que el staff captura NUNCA se le suma impuesto encima (ver CLAUDE.md,
-  // sección IVA/0034). subtotal/taxes se DERIVAN de total, nunca al revés.
-  const total = Math.round(nightlyRate * nights * 100) / 100;
-  const ivaPorcentaje = await getHotelIvaPorcentaje(hotelId);
-  const { subtotal, montoIva: taxes } = calculateTaxBreakdown(total, ivaPorcentaje);
+  // nightlyRate es la tarifa negociada que el staff puede capturar (UX
+  // existente) -- ya no se hace aritmética aquí con ella: se reenvía como
+  // override y createQuote() la resuelve contra room_types.base_rate en el
+  // servidor (auditoría de precio, Tier 1, ver CLAUDE.md). Vacío = sin
+  // override, usa la tarifa de lista.
+  const nightlyRateRaw = formData.get("nightlyRate");
+  const nightlyRateOverride =
+    nightlyRateRaw !== null && nightlyRateRaw !== "" ? Number(nightlyRateRaw) : undefined;
 
   const { quoteOptionId } = await createQuote({
     hotelId,
@@ -34,11 +26,9 @@ export async function submitSearchAndQuote(formData: FormData) {
     paxChildren: Number(formData.get("paxChildren") || 0),
     hasPets: formData.get("hasPets") === "on",
     roomTypeId: String(formData.get("roomTypeId")),
-    checkIn,
-    checkOut,
-    subtotal,
-    taxes,
-    total,
+    checkIn: String(formData.get("checkIn")),
+    checkOut: String(formData.get("checkOut")),
+    nightlyRateOverride,
   });
 
   redirect(`/reservaciones?quoteOptionId=${quoteOptionId}`);
@@ -78,9 +68,12 @@ export async function submitReleaseHold(formData: FormData) {
 export async function submitConfirmReservation(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const holdId = String(formData.get("holdId"));
-  const rateTotal = Number(formData.get("rateTotal") || 0);
   const channel = String(formData.get("channel") || "direct");
 
+  // rateTotal ya no se lee del formulario: confirm_reservation_from_hold()
+  // lo deriva siempre de quote_options.total vía el Hold que se está
+  // confirmando, nunca de lo que el navegador reenvíe (auditoría de
+  // precio, Tier 1, ver CLAUDE.md).
   const reservation = await confirmReservation({
     hotelId,
     holdId,
@@ -88,7 +81,6 @@ export async function submitConfirmReservation(formData: FormData) {
     primaryGuestEmail: String(formData.get("primaryGuestEmail") || "") || undefined,
     primaryGuestPhone: String(formData.get("primaryGuestPhone") || "") || undefined,
     channel,
-    rateTotal,
   });
 
   const depositAmount = Number(formData.get("depositAmount") || 0);

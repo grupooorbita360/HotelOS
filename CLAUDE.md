@@ -213,6 +213,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0044_created_by_audit_fixes.sql` | Fix de auditoría: `attempt_inventory_hold()`/`confirm_reservation_from_hold()` no fijaban `inventory_blocks.created_by`; política de `quote_options` no exigía `created_by = auth.uid()` en el `WITH CHECK` (ver sección de Reservaciones) |
 | `0045_revoke_public_execute_internal_functions.sql` | Fix de seguridad: revoca `EXECUTE` de `PUBLIC`/`anon` en `expire_stale_holds()`, `recompute_stay_next_action()`, los 7 triggers `handle_*`, `set_audit_fields()`, `set_updated_at_only()`, `sync_stay_account_balance()` y `assert_hotel_member()` -- ninguna función interna debería tener grant a `anon` por el default de Postgres (ver sección de Reservaciones) |
 | `0046_caja_module.sql` | Módulo Caja: `payment_methods`, `payment_movements`, `cash_settings`, `cash_shifts`, `cash_movements`; extiende `payments`/`stay_transactions` (aditivo); funciones `register_payment_with_movements()`/`register_refund()`/`validate_payment()`/`register_stay_adjustment()`/`open_cash_shift()`/`close_cash_shift()`/`register_cash_expense()`; `hotels.moneda_base` (ver sección de Caja) |
+| `0047_pricing_source_of_truth_tier1.sql` | Fuente única de precio (Tier 1, auditoría externa): `confirm_reservation_from_hold()` pierde `p_rate_total` -- `rate_total` se deriva siempre de `quote_options.total` vía `inventory_holds.quote_option_id`, nunca de un parámetro que el caller pudiera mandar (ver sección "Fuente única de precio") |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -1785,6 +1786,109 @@ esta tabla. Las 5 transiciones humanas (`acknowledge_hotel_priority()` y
 el resto, 0037) sí corren con el cliente de sesión del usuario y sí dejan
 `updated_by` correcto -- el hueco es exclusivamente `created_by` en el
 `INSERT` original del motor, y sólo ahí.
+
+## Fuente única de precio (auditoría externa, Tier 1)
+
+Auditoría externa encontró que HotelOS no tenía una fuente única de
+cálculo de precio: cuatro puntos distintos lo resolvían cada uno por su
+cuenta -- `submitSearchAndQuote()` tomaba `nightlyRate` crudo del
+`FormData` del navegador; `searchAvailableOptions()` mostraba
+`room_types.base_rate` como "precio de referencia" sin validarlo;
+`submitConfirmReservation()` tomaba un `rateTotal` **independiente**
+también crudo del `FormData`, sin relación alguna con lo ya cotizado; y
+`listRoomAssignmentOptions()` (Recepción) recalculaba el upgrade con
+`room_types.base_rate` en vez de la tarifa realmente vendida. Un mismo
+hueco con cuatro síntomas, no cuatro bugs distintos -- se propuso el
+diseño completo antes de tocar código (mismo patrón que el fix de
+`service_role`, 0038, y el de IVA, 0034) y se aprobó por partes: Tier 1
+(cierra los cuatro síntomas reportados) primero, Tier 2 (cerrar
+`quote_options` al mismo patrón sin-INSERT-de-cliente que
+`inventory_blocks`/`reservations`) como decisión separada posterior.
+
+### Tier 1: cálculo central + freeze real en confirm
+
+- **`src/lib/pricing.ts` (`calculateStayPrice()`)** -- función pura, sin
+  acceso a DB, mismo espíritu que `calculateTaxBreakdown()` (0034): recibe
+  `baseRateNightly` (ya resuelto por el caller desde `room_types.base_rate`),
+  `nights`, un `nightlyRateOverride` opcional y `ivaPorcentaje`, y devuelve
+  `{ nightlyRateUsed, subtotal, taxes, total, isOverride }`. El override
+  **no se prohíbe** -- sigue siendo la tarifa negociada que el staff ya
+  podía capturar al cotizar (Módulo 04) -- sólo deja de determinar el total
+  por su cuenta: pasa por el mismo cálculo que la tarifa de lista.
+- **`createQuote()`** (`modules/reservaciones/actions/quote.ts`) ya no
+  acepta `subtotal`/`taxes`/`total` del caller: recibe
+  `nightlyRateOverride?`, resuelve `room_types.base_rate` server-side y
+  calcula con `calculateStayPrice()` antes de insertar en `quote_options`.
+  `submitSearchAndQuote()` dejó de hacer aritmética -- sólo reenvía
+  `nightlyRate` (si el staff lo editó) como `nightlyRateOverride`.
+- **`confirm_reservation_from_hold()` (0047) perdió `p_rate_total` de la
+  firma por completo** -- no sólo dejó de usarse, se quitó del parámetro
+  (drop + create, Postgres no permite quitar un parámetro con
+  `create or replace`; mismo criterio ya aplicado en 0037 a
+  `upsert_hotel_priority()`: "se quitan de la firma, no sólo se ignoran").
+  `rate_total` se deriva siempre de
+  `inventory_holds.quote_option_id -> quote_options.total` -- el mismo
+  Hold que se está confirmando, nunca de un valor que el navegador
+  reenviara en el formulario de confirmación. Un Hold sin
+  `quote_option_id` (no generado por la UI actual) sigue cayendo en 0,
+  igual que el default anterior. Se aprovechó el mismo cambio de firma
+  para aplicarle la higiene de 0045/0046 (`revoke ... from public/anon`,
+  sólo `authenticated`), ya que de cualquier forma había que recrear la
+  función.
+  `confirmReservation()`/`submitConfirmReservation()` dejaron de pedir
+  `rateTotal`; el campo oculto `rateTotal` del formulario de confirmación
+  (`src/app/reservaciones/page.tsx`) se eliminó -- ya no hay ningún valor
+  de precio que el cliente pueda reenviar en ese paso.
+- **`listRoomAssignmentOptions()`** (Recepción) gana un parámetro
+  `soldNightlyRate` (la tarifa **realmente vendida**,
+  `reservation_stays.rate_total / noches`) que reemplaza el
+  `room_types.base_rate` del tipo vendido como base de comparación del
+  upgrade -- ambos podían divergir por una tarifa negociada al cotizar, o
+  porque `base_rate` cambió en Configuración después de confirmarse esa
+  reserva en particular. El lado "upgrade" sigue comparando contra el
+  `base_rate` **actual** del tipo candidato -- no hay tarifa histórica que
+  congelar para una habitación que el huésped nunca reservó. Su único call
+  site (`src/app/recepcion/page.tsx`) ya tenía `rate_total` cargado para
+  el estado de cuenta; se reordenó para calcular `soldNightlyRate` antes
+  de pedir las opciones, sin duplicar la lectura.
+
+**Validado localmente antes de mandar la migración** (Postgres 16 local,
+mismo rigor que toda migración de este proyecto): cotizar con y sin
+override reconstruye `subtotal + taxes = total` exacto en ambos casos;
+confirmar una reserva real dentro de una transacción de prueba deja
+`reservation_stays.rate_total` **idéntico** a `quote_options.total` del
+Hold confirmado, sin que ningún parámetro de precio exista ya en la
+llamada; un Hold sin cotización previa sigue cayendo en `rate_total = 0`
+(comportamiento sin cambios); la firma vieja con `p_rate_total` ya no
+resuelve en absoluto (`function ... does not exist`); el gate de
+`has_permission('reservations.create')` sigue rechazando a un rol sin ese
+permiso (código de la función sin tocar, sólo se movió la derivación del
+precio). Pendiente de aplicar contra Supabase real y repetir estas mismas
+pruebas ahí antes de dar el ciclo por cerrado.
+
+### Tier 2 (decisión separada, pendiente de luz verde)
+
+Antes de tocar la política de `quote_options`, se confirmó lo pedido: la
+política de escritura actual (`quote_options_write_reservations_create_or_platform_admin`,
+0012, endurecida en 0044) **ya exige ambas cosas**, no sólo
+`created_by = auth.uid()` -- el `WITH CHECK` (y el `USING`) piden
+`created_by = auth.uid() AND (is_platform_admin() OR has_permission(hotel_id, 'reservations.create'))`.
+Es decir: un caller que se saltara el Server Action y pegara directo a
+PostgREST con su propio token **ya no puede** insertar una cotización
+para otro usuario, ni para un hotel donde no tiene `reservations.create`
+-- pero sí puede, dentro de su propio hotel y con ese permiso legítimo,
+insertar un `total` fabricado que no pasó por `calculateStayPrice()` (la
+tabla sigue aceptando INSERT directo del cliente, 0012). A diferencia del
+residual ya aceptado en 0037 para `upsert_hotel_priority()` (un
+título/mensaje inventado, puramente informativo), este residual sí tiene
+dinero de por medio: alguien con `reservations.create` en su propio hotel
+podría cotizar con un total menor al real vía REST directo y luego
+confirmar sobre ese total ya congelado. Cerrarlo de raíz significa mover
+`quote_options` al mismo patrón que `inventory_blocks`/`reservations`
+(sin política de `INSERT` para el cliente, sólo una función
+`SECURITY DEFINER` nueva) -- cambio de RLS real sobre una tabla en
+producción con datos reales, por eso se reporta este hallazgo primero y
+se espera confirmación explícita antes de implementarlo.
 
 ## Convenciones de nombres
 

@@ -332,7 +332,6 @@ export default async function ReservacionesPage({
               <form action={submitConfirmReservation} className="grid grid-cols-2 gap-4">
                 <input type="hidden" name="hotelId" value={hotel.hotelId} />
                 <input type="hidden" name="holdId" value={hold.id} />
-                <input type="hidden" name="rateTotal" value={hold.quote_options?.total ?? 0} />
                 <Field label="Nombre del huésped" className="col-span-2">
                   <TextInput
                     name="primaryGuestName"

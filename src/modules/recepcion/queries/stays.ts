@@ -121,11 +121,21 @@ export interface RoomAssignmentOption {
  * + de otros tipos con tarifa base mayor ("upgrade", con la diferencia ya
  * calculada x noches). No se ofrecen downgrades como recomendacion -- ver
  * CLAUDE.md, sección Recepción.
+ *
+ * soldNightlyRate: la tarifa POR NOCHE realmente vendida en esta reserva
+ * (reservation_stays.rate_total / noches), no room_types.base_rate del tipo
+ * vendido -- pueden diferir porque el staff negoció una tarifa distinta al
+ * cotizar, o porque base_rate cambió en Configuración desde que esta
+ * reserva se confirmó (auditoría de precio, Tier 1, ver CLAUDE.md). El lado
+ * "upgrade" sigue comparando contra el base_rate ACTUAL del tipo candidato:
+ * no hay tarifa histórica que congelar para una habitación que el huésped
+ * nunca reservó.
  */
 export async function listRoomAssignmentOptions(
   hotelId: string,
   soldRoomTypeId: string,
   nights: number,
+  soldNightlyRate: number,
 ): Promise<RoomAssignmentOption[]> {
   const supabase = await createClient();
 
@@ -151,14 +161,13 @@ export async function listRoomAssignmentOptions(
   const occupied = new Set((activeAssignments ?? []).map((a) => a.room_id));
 
   const roomTypeById = new Map(roomTypes.map((rt) => [rt.id, rt]));
-  const soldRate = roomTypeById.get(soldRoomTypeId)?.base_rate ?? 0;
 
   return rooms
     .filter((r) => !occupied.has(r.id))
     .map((r) => {
       const type = roomTypeById.get(r.room_type_id);
       const isEquivalente = r.room_type_id === soldRoomTypeId;
-      const diff = isEquivalente ? 0 : Math.round((((type?.base_rate ?? 0) - soldRate) * nights) * 100) / 100;
+      const diff = isEquivalente ? 0 : Math.round((((type?.base_rate ?? 0) - soldNightlyRate) * nights) * 100) / 100;
       return {
         id: r.id,
         code: r.code,

@@ -3,6 +3,8 @@
 import { requirePermission } from "@/lib/auth/permissions";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { createClient } from "@/lib/supabase/server";
+import { getHotelIvaPorcentaje } from "@/modules/reservaciones/queries/policies";
+import { calculateStayPrice } from "@/lib/pricing";
 
 export interface CreateQuoteInput {
   hotelId: string;
@@ -15,9 +17,7 @@ export interface CreateQuoteInput {
   roomTypeId: string;
   checkIn: string;
   checkOut: string;
-  subtotal: number;
-  taxes: number;
-  total: number;
+  nightlyRateOverride?: number;
   channel?: string;
 }
 
@@ -25,6 +25,13 @@ export interface CreateQuoteInput {
  * Cotizar (spec S15): crea el Lead (si no existe), la Cotización y su
  * OpcionCotizada. NUNCA compromete inventario -- eso solo ocurre al aceptar
  * la opción y pedir el Hold (ver actions/hold.ts).
+ *
+ * subtotal/taxes/total SIEMPRE se calculan aquí, en el servidor, a partir
+ * de room_types.base_rate -- nunca se aceptan ya calculados del caller
+ * (auditoría de precio, Tier 1, ver CLAUDE.md). nightlyRateOverride sigue
+ * siendo la tarifa negociada que el staff puede capturar (UX existente),
+ * pero pasa por calculateStayPrice() igual que la tarifa de lista, nunca
+ * determina el total por su cuenta.
  */
 export async function createQuote(input: CreateQuoteInput) {
   await requirePermission(input.hotelId, "reservations.create");
@@ -34,6 +41,26 @@ export async function createQuote(input: CreateQuoteInput) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) throw new Error("No hay sesión activa.");
+
+  const { data: roomType, error: roomTypeError } = await supabase
+    .from("room_types")
+    .select("base_rate")
+    .eq("id", input.roomTypeId)
+    .eq("hotel_id", input.hotelId)
+    .single();
+  if (roomTypeError) throw roomTypeError;
+
+  const nights = Math.max(
+    1,
+    Math.round((new Date(input.checkOut).getTime() - new Date(input.checkIn).getTime()) / (1000 * 60 * 60 * 24)),
+  );
+  const ivaPorcentaje = await getHotelIvaPorcentaje(input.hotelId);
+  const { subtotal, taxes, total } = calculateStayPrice({
+    baseRateNightly: roomType.base_rate,
+    nights,
+    nightlyRateOverride: input.nightlyRateOverride,
+    ivaPorcentaje,
+  });
 
   const { data: lead, error: leadError } = await supabase
     .from("leads")
@@ -79,9 +106,9 @@ export async function createQuote(input: CreateQuoteInput) {
       adults: input.paxAdults,
       children: input.paxChildren,
       has_pets: input.hasPets,
-      subtotal: input.subtotal,
-      taxes: input.taxes,
-      total: input.total,
+      subtotal,
+      taxes,
+      total,
       created_by: user.id,
     })
     .select("id")
@@ -94,7 +121,7 @@ export async function createQuote(input: CreateQuoteInput) {
     eventType: "quote.issued",
     entityType: "quote",
     entityId: quote.id,
-    payload: { lead_id: lead.id, quote_option_id: option.id, total: input.total },
+    payload: { lead_id: lead.id, quote_option_id: option.id, total },
   });
 
   return { leadId: lead.id as string, quoteId: quote.id as string, quoteOptionId: option.id as string };

@@ -1334,7 +1334,6 @@ export interface Database {
           p_primary_guest_email?: string | null;
           p_primary_guest_phone?: string | null;
           p_channel?: string;
-          p_rate_total?: number;
           p_cancellation_policy_snapshot?: Json;
           p_adults?: number;
           p_children?: number;
