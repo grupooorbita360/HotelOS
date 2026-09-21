@@ -214,6 +214,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0045_revoke_public_execute_internal_functions.sql` | Fix de seguridad: revoca `EXECUTE` de `PUBLIC`/`anon` en `expire_stale_holds()`, `recompute_stay_next_action()`, los 7 triggers `handle_*`, `set_audit_fields()`, `set_updated_at_only()`, `sync_stay_account_balance()` y `assert_hotel_member()` -- ninguna función interna debería tener grant a `anon` por el default de Postgres (ver sección de Reservaciones) |
 | `0046_caja_module.sql` | Módulo Caja: `payment_methods`, `payment_movements`, `cash_settings`, `cash_shifts`, `cash_movements`; extiende `payments`/`stay_transactions` (aditivo); funciones `register_payment_with_movements()`/`register_refund()`/`validate_payment()`/`register_stay_adjustment()`/`open_cash_shift()`/`close_cash_shift()`/`register_cash_expense()`; `hotels.moneda_base` (ver sección de Caja) |
 | `0047_pricing_source_of_truth_tier1.sql` | Fuente única de precio (Tier 1, auditoría externa): `confirm_reservation_from_hold()` pierde `p_rate_total` -- `rate_total` se deriva siempre de `quote_options.total` vía `inventory_holds.quote_option_id`, nunca de un parámetro que el caller pudiera mandar (ver sección "Fuente única de precio") |
+| `0048_quote_options_no_client_insert.sql` | Fuente única de precio (Tier 2): retira la política de `INSERT`/`UPDATE` de cliente en `quote_options`; único camino de escritura es `create_quote_option()` (`SECURITY DEFINER`), que calcula `subtotal`/`taxes`/`total` server-side -- ningún parámetro de precio ya hecho (ver sección "Fuente única de precio") |
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -1866,29 +1867,73 @@ permiso (código de la función sin tocar, sólo se movió la derivación del
 precio). Pendiente de aplicar contra Supabase real y repetir estas mismas
 pruebas ahí antes de dar el ciclo por cerrado.
 
-### Tier 2 (decisión separada, pendiente de luz verde)
+### Tier 2: `quote_options` sin INSERT de cliente (0048)
 
-Antes de tocar la política de `quote_options`, se confirmó lo pedido: la
-política de escritura actual (`quote_options_write_reservations_create_or_platform_admin`,
-0012, endurecida en 0044) **ya exige ambas cosas**, no sólo
-`created_by = auth.uid()` -- el `WITH CHECK` (y el `USING`) piden
+Antes de tocar la política, se confirmó lo pedido: la política de
+escritura anterior (`quote_options_write_reservations_create_or_platform_admin`,
+0012, endurecida en 0044) **ya exigía ambas cosas**, no sólo
+`created_by = auth.uid()` -- el `WITH CHECK` (y el `USING`) pedían
 `created_by = auth.uid() AND (is_platform_admin() OR has_permission(hotel_id, 'reservations.create'))`.
 Es decir: un caller que se saltara el Server Action y pegara directo a
-PostgREST con su propio token **ya no puede** insertar una cotización
-para otro usuario, ni para un hotel donde no tiene `reservations.create`
--- pero sí puede, dentro de su propio hotel y con ese permiso legítimo,
-insertar un `total` fabricado que no pasó por `calculateStayPrice()` (la
-tabla sigue aceptando INSERT directo del cliente, 0012). A diferencia del
-residual ya aceptado en 0037 para `upsert_hotel_priority()` (un
-título/mensaje inventado, puramente informativo), este residual sí tiene
-dinero de por medio: alguien con `reservations.create` en su propio hotel
-podría cotizar con un total menor al real vía REST directo y luego
-confirmar sobre ese total ya congelado. Cerrarlo de raíz significa mover
-`quote_options` al mismo patrón que `inventory_blocks`/`reservations`
-(sin política de `INSERT` para el cliente, sólo una función
-`SECURITY DEFINER` nueva) -- cambio de RLS real sobre una tabla en
-producción con datos reales, por eso se reporta este hallazgo primero y
-se espera confirmación explícita antes de implementarlo.
+PostgREST con su propio token ya no podía insertar una cotización para
+otro usuario, ni para un hotel donde no tiene `reservations.create` --
+pero sí podía, dentro de su propio hotel y con ese permiso legítimo,
+insertar un `total` fabricado que nunca pasó por el cálculo real. A
+diferencia del residual ya aceptado en 0037 para `upsert_hotel_priority()`
+(un título/mensaje inventado, puramente informativo), éste sí tenía
+dinero de por medio.
+
+`0048_quote_options_no_client_insert.sql` cierra esto con el mismo patrón
+que `inventory_holds`/`inventory_blocks`/`reservations` (0013/0015/0016):
+se retira por completo la política de escritura de `quote_options` (ya no
+hay `INSERT` ni `UPDATE` de cliente, sólo `SELECT`) y el único camino de
+escritura pasa a ser `create_quote_option()` (`SECURITY DEFINER`).
+
+**Diferencia clave con Tier 1**: Tier 1 sólo dejó de *confiar* en un total
+ya calculado por el cliente (`createQuote()`, en TypeScript, seguía
+haciendo el cálculo). Tier 2 mueve el cálculo mismo **por completo** a
+`create_quote_option()` -- mismo criterio que 0037 aplicó a
+`priority_score` ("tener el mismo cálculo en dos lenguajes sólo servía
+para que el del cliente fuera el que un caller malicioso podía ignorar").
+La función deriva `hotel_id` de la fila de `quotes` (que ya existe cuando
+se la invoca -- `createQuote()` la inserta primero, sin cambios), nunca de
+un parámetro suelto (lección 0040/0043); resuelve `room_types.base_rate`
+y `hotel_policies.iva_porcentaje` ella misma; y sólo acepta
+`p_nightly_rate_override` como entrada de precio -- la misma tarifa
+negociada que el staff ya podía capturar, nunca un total/subtotal/taxes ya
+hechos. Un caller que invoque el RPC directo por REST, aunque tenga
+`reservations.create` legítimo en su propio hotel, **no tiene ningún
+parámetro de precio que fabricar**: sólo puede pedir una tarifa por noche
+distinta, que pasa por el mismo cálculo que la tarifa de lista.
+
+Como consecuencia, `src/lib/pricing.ts` (`calculateStayPrice()`, Tier 1)
+se quedó sin caller -- `createQuote()` ya no calcula nada, sólo reenvía
+`nightlyRateOverride` al RPC y usa `option.total` de lo que el RPC
+devuelve. Se borró, mismo destino que `scoring.ts` en 0037.
+
+**Validado localmente** (mismo Postgres 16 de las pruebas de Tier 1, con
+0047+0048 aplicadas juntas):
+- **A** -- un `INSERT` directo a `quote_options` con un `total` fabricado
+  (`1`, muy por debajo del real), ejecutado como `hotel_admin` de Hotel A
+  con `reservations.create` legítimo *en su propio hotel*, es rechazado
+  categóricamente por RLS (`new row violates row-level security policy for
+  table "quote_options"`) -- no hay ninguna combinación de permiso que lo
+  permita, porque ya no existe política de `INSERT` en absoluto.
+- **B** -- el flujo normal (`create_quote_option()` vía RPC, tal como lo
+  llama `createQuote()`) sigue funcionando exactamente igual: tipo
+  Sencilla de Hotel A (`base_rate = 950`), 2 noches, sin override →
+  `total = 1900.00`, `subtotal = 1637.93`, `taxes = 262.07`.
+- **C** -- mismo tipo/hotel, 2 noches, con `p_nightly_rate_override = 700`
+  → `total = 1400.00`, `subtotal = 1206.90`, `taxes = 193.10` -- **valores
+  idénticos** a los que `calculateStayPrice()` (TypeScript, Tier 1) ya
+  había calculado para el mismo caso antes de borrarse, confirmando que
+  mover el cálculo a SQL no cambió el resultado. La firma de
+  `create_quote_option()` se confirmó de 8 parámetros, ninguno
+  `subtotal`/`taxes`/`total` -- no existe vector para inyectar un precio
+  ya hecho.
+
+Pendiente de aplicar `0047`+`0048` contra Supabase real y repetir estas
+mismas pruebas ahí antes de dar el ciclo por cerrado.
 
 ## Convenciones de nombres
 

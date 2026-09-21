@@ -1327,6 +1327,19 @@ export interface Database {
         };
         Returns: Database["public"]["Tables"]["inventory_holds"]["Row"];
       };
+      create_quote_option: {
+        Args: {
+          p_quote_id: string;
+          p_room_type_id: string;
+          p_check_in: string;
+          p_check_out: string;
+          p_adults?: number;
+          p_children?: number;
+          p_has_pets?: boolean;
+          p_nightly_rate_override?: number | null;
+        };
+        Returns: Database["public"]["Tables"]["quote_options"]["Row"];
+      };
       confirm_reservation_from_hold: {
         Args: {
           p_hold_id: string;
