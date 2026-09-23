@@ -1337,6 +1337,8 @@ export interface Database {
           p_children?: number;
           p_has_pets?: boolean;
           p_nightly_rate_override?: number | null;
+          p_is_courtesy?: boolean;
+          p_discount_reason?: string | null;
         };
         Returns: Database["public"]["Tables"]["quote_options"]["Row"];
       };
@@ -1481,6 +1483,17 @@ export interface Database {
       };
       assign_room_for_checkin: {
         Args: { p_stay_id: string; p_room_id: string };
+        Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
+      };
+      change_room_with_authorization: {
+        Args: {
+          p_stay_id: string;
+          p_new_room_id: string;
+          p_reason?: string | null;
+          p_is_courtesy?: boolean;
+          p_charge_amount?: number | null;
+          p_compensation_amount?: number | null;
+        };
         Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
       };
       upsert_hotel_priority: {

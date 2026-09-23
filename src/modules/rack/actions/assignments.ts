@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { requirePermission } from "@/lib/auth/permissions";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { createClient } from "@/lib/supabase/server";
@@ -13,6 +14,17 @@ import { invalidateRackCache } from "@/modules/rack/queries/grid";
  * solo la invoca. RLS + has_permission('room.change') dentro de la función
  * son la barrera real; requirePermission() aquí es solo la capa de UX
  * (mismo patrón que el resto del proyecto).
+ *
+ * P0-4 (handoff de demo): invalidateRackCache() sólo limpia el Map en
+ * memoria del proceso que atendió ESTA petición -- en cualquier despliegue
+ * con más de una instancia (el caso normal en producción), el siguiente
+ * router.refresh() del cliente puede aterrizar en OTRA instancia que nunca
+ * se enteró de la invalidación y sigue sirviendo su copia cacheada hasta
+ * que expire el TTL de 45s. revalidatePath("/rack") es el mecanismo del
+ * propio framework (no depende de qué instancia lo procesa) -- el flujo de
+ * "Reservas sin asignar" (src/app/rack/actions.ts) ya lo llamaba; el drag &
+ * drop nunca lo había hecho porque llama a esta función directo desde un
+ * Client Component, sin pasar por un Server Action que lo agregara.
  */
 export async function assignRoomFromRack(hotelId: string, stayId: string, newRoomId: string, reason?: string) {
   await requirePermission(hotelId, "room.change");
@@ -43,5 +55,6 @@ export async function assignRoomFromRack(hotelId: string, stayId: string, newRoo
   });
 
   invalidateRackCache(hotelId);
+  revalidatePath("/rack");
   return data;
 }

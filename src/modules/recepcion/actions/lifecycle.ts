@@ -52,6 +52,52 @@ export async function assignRoomForCheckin(hotelId: string, stayId: string, room
   return data;
 }
 
+export interface ChangeRoomAuthorizationInput {
+  reason?: string;
+  isCourtesy?: boolean;
+  chargeAmount?: number;
+  compensationAmount?: number;
+}
+
+/**
+ * Cambio de habitación autorizado para una estancia YA asignada (P0-3/P0-5,
+ * handoff de demo) -- a diferencia de assignRoomForCheckin() (0032, sólo al
+ * momento del check-in) y de assignRoomFromRack() (Rack, sólo mismo tipo),
+ * esta sí permite upgrade/downgrade después del check-in vía
+ * change_room_with_authorization() (0051): la función SQL determina
+ * upgrade/downgrade comparando tarifas, exige motivo salvo para un cambio
+ * equivalente, y cobra/compensa vía register_stay_transaction() (0026) --
+ * no depende de que Caja (0046) esté desplegada.
+ */
+export async function changeRoomWithAuthorization(hotelId: string, stayId: string, roomId: string, input: ChangeRoomAuthorizationInput) {
+  await requirePermission(hotelId, "room.change");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("change_room_with_authorization", {
+    p_stay_id: stayId,
+    p_new_room_id: roomId,
+    p_reason: input.reason ?? null,
+    p_is_courtesy: input.isCourtesy ?? false,
+    p_charge_amount: input.chargeAmount ?? null,
+    p_compensation_amount: input.compensationAmount ?? null,
+  });
+  if (error) throw error;
+  await logTimelineEvent({
+    hotelId,
+    module: "front_desk",
+    eventType: "stay.room_changed",
+    entityType: "stay",
+    entityId: stayId,
+    payload: {
+      new_room_id: roomId,
+      reason: input.reason ?? null,
+      is_courtesy: input.isCourtesy ?? false,
+      charge_amount: input.chargeAmount ?? null,
+      compensation_amount: input.compensationAmount ?? null,
+    },
+  });
+  return data;
+}
+
 export async function deliverRoom(hotelId: string, stayId: string) {
   await requirePermission(hotelId, "checkin.perform");
   const supabase = await createClient();

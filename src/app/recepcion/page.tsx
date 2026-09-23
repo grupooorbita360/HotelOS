@@ -3,8 +3,8 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { getHotelFeatures } from "@/lib/auth/platform";
 import { signOut } from "@/app/login/actions";
-import { formatDateRange } from "@/lib/format";
-import { listStays, getStayDetails, listRoomAssignmentOptions, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
+import { formatDateRange, formatBalanceLabel } from "@/lib/format";
+import { listStays, getStayDetails, listRoomAssignmentOptions, listRoomChangeOptions, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -27,12 +27,13 @@ import {
   submitCreateIncident,
   submitResolveIncident,
   submitSetAsset,
+  submitChangeRoom,
 } from "./actions";
 
 export default async function RecepcionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ stayId?: string; error?: string; checkinStep?: string }>;
+  searchParams: Promise<{ stayId?: string; error?: string; checkinStep?: string; roomChangeStep?: string }>;
 }) {
   const params = await searchParams;
 
@@ -115,6 +116,25 @@ export default async function RecepcionPage({
   const equivalentOptions = roomOptions.filter((o) => o.kind === "equivalente");
   const upgradeOptions = roomOptions.filter((o) => o.kind === "upgrade");
 
+  // P0-3/P0-5 (handoff de demo): opciones para el cambio de habitación
+  // autorizado DESPUÉS del check-in -- el tipo "actual" es el de la
+  // habitación asignada si existe, o si no, el tipo vendido (mismo
+  // fallback que change_room_with_authorization(), 0051).
+  const needsRoomChangeOptions =
+    !!detail &&
+    params.roomChangeStep === "1" &&
+    (detail.stay.status === "checked_in" || detail.stay.status === "in_house");
+  const currentRoomTypeId =
+    (detail?.activeAssignment?.rooms as unknown as { room_type_id: string } | null)?.room_type_id ??
+    detail?.stay.reservation_stays?.room_type_id ??
+    "";
+  const roomChangeOptions = needsRoomChangeOptions
+    ? await listRoomChangeOptions(hotel.hotelId, currentRoomTypeId)
+    : [];
+  const equivalentChangeOptions = roomChangeOptions.filter((o) => o.kind === "equivalente");
+  const upgradeChangeOptions = roomChangeOptions.filter((o) => o.kind === "upgrade");
+  const downgradeChangeOptions = roomChangeOptions.filter((o) => o.kind === "downgrade");
+
   const checkinAssets = detail ? await getHotelCheckinAssets(hotel.hotelId) : [];
 
   const extrasCharged = detail
@@ -122,6 +142,18 @@ export default async function RecepcionPage({
     : 0;
   const totalPagado = detail
     ? -detail.transactions.filter((t) => t.type === "payment").reduce((sum, t) => sum + Number(t.amount), 0)
+    : 0;
+
+  // P0-8 (handoff de demo): total cargos/total abonos de TODA la cuenta
+  // (no sólo "extras" como arriba) -- se derivan del signo real de cada
+  // transacción (positivo = se le suma a lo que debe, negativo = se le
+  // resta), no del tipo -- así cubre charge/refund/payment/adjustment por
+  // igual, sin tener que listar tipos a mano.
+  const totalCargos = detail
+    ? detail.transactions.filter((t) => Number(t.amount) > 0).reduce((sum, t) => sum + Number(t.amount), 0)
+    : 0;
+  const totalAbonos = detail
+    ? -detail.transactions.filter((t) => Number(t.amount) < 0).reduce((sum, t) => sum + Number(t.amount), 0)
     : 0;
 
   return (
@@ -169,7 +201,7 @@ export default async function RecepcionPage({
                     </p>
                     <p className="text-xs font-medium text-brand">{nextActionLabel(s.next_action)}</p>
                     {(s.stay_accounts?.balance ?? 0) > 0 && (
-                      <p className="text-xs text-danger">Saldo: ${s.stay_accounts?.balance}</p>
+                      <p className="text-xs text-danger">{formatBalanceLabel(s.stay_accounts?.balance ?? 0)}</p>
                     )}
                   </Link>
                 );
@@ -249,6 +281,13 @@ export default async function RecepcionPage({
                         <Button>Hacer check-out</Button>
                       </form>
                     )}
+                    {/* P0-5 (handoff de demo): "Cambio de habitación" sólo para una
+                        estancia activa que ya tiene check-in -- nunca antes. */}
+                    {(detail.stay.status === "checked_in" || detail.stay.status === "in_house") && (
+                      <Link href={`/recepcion?stayId=${detail.stay.id}&roomChangeStep=1`}>
+                        <Button variant="secondary">Cambio de habitación</Button>
+                      </Link>
+                    )}
                   </div>
                 </Card>
 
@@ -278,7 +317,7 @@ export default async function RecepcionPage({
                           <div>
                             <p className="text-xs uppercase text-muted">Saldo</p>
                             <p className={`font-semibold ${(detail.stay.stay_accounts?.balance ?? 0) > 0 ? "text-danger" : "text-brand"}`}>
-                              ${detail.stay.stay_accounts?.balance ?? 0}
+                              {formatBalanceLabel(detail.stay.stay_accounts?.balance ?? 0)}
                             </p>
                           </div>
                         </div>
@@ -399,15 +438,97 @@ export default async function RecepcionPage({
                   </Card>
                 )}
 
+                {/* Cambio de habitación autorizado (P0-3/P0-5, handoff de demo):
+                    a diferencia de "Asignar habitación" (arriba, sólo para el
+                    caso raro de checked_in sin habitación), este SÍ permite
+                    upgrade/downgrade de una estancia que ya tiene una asignada. */}
+                {needsRoomChangeOptions && (
+                  <Card className="space-y-3">
+                    <CardTitle>Cambio de habitación</CardTitle>
+                    {roomChangeOptions.length === 0 ? (
+                      <Banner tone="warning">No hay otras habitaciones libres ahora mismo.</Banner>
+                    ) : (
+                      <form action={submitChangeRoom} className="space-y-3">
+                        <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                        <input type="hidden" name="stayId" value={detail!.stay.id} />
+                        <Field label="Nueva habitación">
+                          <Select name="roomId" required>
+                            {equivalentChangeOptions.length > 0 && (
+                              <optgroup label="Equivalente (mismo tipo, sin costo)">
+                                {equivalentChangeOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} · {o.roomTypeName}
+                                    {o.isClean ? "" : " (sucia)"}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {upgradeChangeOptions.length > 0 && (
+                              <optgroup label="Upgrade">
+                                {upgradeChangeOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} · {o.roomTypeName}
+                                    {o.isClean ? "" : " (sucia)"}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {downgradeChangeOptions.length > 0 && (
+                              <optgroup label="Downgrade">
+                                {downgradeChangeOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} · {o.roomTypeName}
+                                    {o.isClean ? "" : " (sucia)"}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </Select>
+                        </Field>
+                        <Field label="Motivo (obligatorio para upgrade/downgrade)">
+                          <TextInput name="reason" placeholder="Ej. solicitud del huésped, falla en la habitación…" />
+                        </Field>
+                        <div className="grid grid-cols-3 gap-3">
+                          <label className="flex items-end gap-2 pb-2 text-muted-strong">
+                            <input type="checkbox" name="isCourtesy" className="h-4 w-4" /> Upgrade de cortesía (sin cobro)
+                          </label>
+                          <Field label="Cobro de upgrade (si no es cortesía)">
+                            <TextInput name="chargeAmount" type="number" min={0} step="0.01" />
+                          </Field>
+                          <Field label="Compensación por downgrade (opcional)">
+                            <TextInput name="compensationAmount" type="number" min={0} step="0.01" />
+                          </Field>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Button>Confirmar cambio de habitación</Button>
+                          <Link href={`/recepcion?stayId=${detail!.stay.id}`} className="text-muted underline">
+                            Cancelar
+                          </Link>
+                        </div>
+                      </form>
+                    )}
+                  </Card>
+                )}
+
                 {/* Cuenta de la estancia */}
                 <Card className="space-y-3">
                   <div className="flex items-center justify-between">
                     <CardTitle>Cuenta de la estancia</CardTitle>
-                    <b className={detail.stay.reservation_stays ? "" : ""}>
-                      Saldo: <span className={detail.stay.stay_accounts && detail.stay.stay_accounts.balance > 0 ? "text-danger" : "text-brand"}>
-                        ${detail.stay.stay_accounts?.balance ?? 0}
-                      </span>
+                    {/* P0-8 (handoff de demo): nunca un número negativo crudo --
+                        "A favor"/"Por pagar"/"Cuenta liquidada" en lenguaje simple. */}
+                    <b className={(detail.stay.stay_accounts?.balance ?? 0) > 0 ? "text-danger" : "text-brand"}>
+                      {formatBalanceLabel(detail.stay.stay_accounts?.balance ?? 0)}
                     </b>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <p className="uppercase text-muted">Total cargos</p>
+                      <p className="font-semibold text-foreground">${totalCargos.toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <p className="uppercase text-muted">Total abonos/depósitos</p>
+                      <p className="font-semibold text-foreground">${totalAbonos.toFixed(2)}</p>
+                    </div>
                   </div>
 
                   {detail.stay.stay_accounts?.status === "open" && (
