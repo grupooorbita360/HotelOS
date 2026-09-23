@@ -1970,8 +1970,217 @@ devuelve. Se borró, mismo destino que `scoring.ts` en 0037.
   `subtotal`/`taxes`/`total` -- no existe vector para inyectar un precio
   ya hecho.
 
-Pendiente de aplicar `0047`+`0048` contra Supabase real y repetir estas
-mismas pruebas ahí antes de dar el ciclo por cerrado.
+**Actualización: `0047`/`0048` ya se aplicaron a Supabase real y las
+pruebas A-D se repitieron ahí con los mismos resultados** -- ver el
+detalle en la sección "Handoff de demo P0" (más abajo, P0-1) para el
+hallazgo real encontrado después: `confirm_reservation_from_hold()` podía
+lanzar `HOLD_EXPIRED` sin que nada lo atrapara, produciendo un 500 crudo
+en vez de un mensaje claro. No es una regresión de Tier 1/2 -- ese hueco
+de manejo de errores ya existía desde antes de esta auditoría de precio;
+Tier 1/2 sólo cambiaron QUÉ se manda al RPC, nunca si sus errores se
+atrapan.
+
+## Handoff de demo P0 (bloqueos de funcionalidad core)
+
+Ronda de corrección sobre una lista de 8 hallazgos (P0-1 a P0-8) reportados
+contra el Hotel Demo real. Se diagnosticó primero (reproduciendo cada uno
+contra Hotel Demo recién reiniciado con `reset_demo_hotel()`, 0050) y sólo
+después se corrigió -- varios comparten la misma causa raíz, documentada
+una sola vez aquí en vez de repetida por punto.
+
+### P0-1: error 500 crudo al confirmar -- causa real, no dato faltante ni regresión de precio
+
+Reproducido en vivo: `submitSearchAndQuote()`/`submitConfirmReservation()`
+(`src/app/reservaciones/actions.ts`) y sus hermanos (`submitCreateHold`,
+`submitReleaseHold`, `submitCancelReservation`,
+`submitRegisterAdditionalPayment`) no atrapaban ninguna excepción de
+negocio -- un Hold vencido (`HOLD_EXPIRED`, 0016) llegando a
+`confirmReservation()` producía un `throw` sin capturar, Next.js lo
+renderizaba como su página de error genérica ("A server error occurred"),
+`digest` incluido. Confirmado con el log real del servidor:
+`⨯ Error: {"code":"P0001",...,"message":"HOLD_EXPIRED"} ... POST
+/reservaciones?holdId=... 500 ... submitConfirmReservation`. No es un dato
+faltante del seed (0050) ni una regresión de Tier 1/2 (ver nota arriba) --
+es un hueco de manejo de errores que ya existía.
+
+Corregido con `src/lib/friendlyError.ts`
+(`friendlyErrorMessage(error, fallback?)`): traduce los códigos que este
+proyecto ya usa (`HOLD_EXPIRED`, `HOLD_NOT_ACTIVE`, `NO_AVAILABILITY`,
+`PERMISSION_DENIED`, `ROOM_TYPE_MISMATCH`, etc.) a un mensaje en español;
+cualquier código no listado cae en un mensaje genérico -- **nunca se
+re-lanza el error crudo**. Todas las Server Actions de
+`reservaciones/actions.ts` ahora atrapan y redirigen con `?error=` (mismo
+patrón que `submitCreateHold()` ya tenía para `NO_AVAILABILITY`, ahora
+generalizado). Bug real encontrado corrigiendo esto: `error instanceof
+Error` no siempre es `true` para un `PostgrestError` de supabase-js que
+cruza la frontera de un Server Action -- `friendlyErrorMessage()` cayó al
+mensaje genérico en la primera prueba en vivo en vez del mensaje
+específico de `HOLD_EXPIRED`. Corregido buscando `.message` en cualquier
+objeto con esa forma, no sólo en instancias reales de `Error`; validado de
+nuevo en vivo con un Hold recién creado y vencido a mano (`expires_at` en
+el pasado) -- esta vez sí mostró "Este Hold ya expiró. Vuelve a cotizar
+para generar uno nuevo.", sin 500.
+
+### P0-2/P0-4: causa compartida real -- `assignRoomFromRack()` nunca llamaba `revalidatePath("/rack")`
+
+No se pudo reproducir "falla al confirmar" para un movimiento de MISMA
+categoría contra Hotel Demo real: arrastrar y soltar, confirmar, y el
+movimiento se aplicó y persistió correctamente (verificado releyendo el
+Rack en una navegación nueva). Pero se encontró la causa raíz real de por
+qué SÍ podía parecer que fallaba: `src/app/rack/actions.ts`
+(`submitAssignUnassigned`, el flujo de formulario plano) ya llamaba
+`revalidatePath("/rack")` después de mover -- pero
+`assignRoomFromRack()` (`src/modules/rack/actions/assignments.ts`, el
+código que **ambos** flujos comparten, incluido el drag & drop) sólo
+llamaba `invalidateRackCache()`, el `Map` en memoria del proceso Node
+documentado explícitamente como "no es un cache distribuido -- en un
+despliegue multi-instancia cada instancia tiene el suyo". En cualquier
+despliegue con más de un proceso sirviendo peticiones, un movimiento podía
+escribirse correctamente en la base y el siguiente `router.refresh()`
+aterrizar en OTRA instancia que nunca se enteró de la invalidación,
+sirviendo su copia cacheada hasta que expirara el TTL de 45s -- exactamente
+lo que un usuario percibiría como "confirmé el movimiento y no pasó nada".
+
+Corregido agregando `revalidatePath("/rack")` dentro de
+`assignRoomFromRack()` mismo (cubre drag & drop y el formulario plano por
+igual, un solo punto) y quitando la llamada ahora redundante en
+`rack/actions.ts`. `invalidateRackCache()` se conserva sin tocar -- sigue
+sirviendo para el caso de una sola instancia (dev local, o cualquier
+despliegue de un solo proceso), donde invalida de inmediato sin esperar el
+TTL.
+
+### P0-3: no era el mismo bug que P0-2 -- era una función que nunca se construyó
+
+Confirmado explícitamente antes de diseñar nada: el "falla" de cambiar a
+categoría DISTINTA es `assign_room()` (0026) rechazando con
+`ROOM_TYPE_MISMATCH` -- comportamiento **intencional** desde el spec
+original ("MVP solo permite asignación equivalente"), capturado limpio por
+el `try/catch` que ya existía en `RackGrid.tsx`, sin crash. No comparte
+causa con P0-2/P0-4: aquí no faltaba invalidar caché, faltaba la función
+de autorización que el spec siempre dejó pendiente.
+
+`change_room_with_authorization()` (`0051_authorized_room_change.sql`) es
+la función nueva: a diferencia de `assign_room()` (Rack, sólo equivalente)
+y `assign_room_for_checkin()` (0032, sólo al momento del check-in), ésta
+permite upgrade/downgrade **después** del check-in. Determina
+upgrade/downgrade comparando `room_types.base_rate` del tipo anterior
+(de la asignación activa si existe, o si no, del tipo vendido en
+`reservation_stays` -- mismo criterio que 0032) contra el tipo nuevo.
+Motivo obligatorio salvo para un cambio equivalente. Autorización:
+`has_permission(hotel_id, 'room.change')` simple -- mismo patrón temporal
+ya usado para Caja (`cash.refund`/`cash.adjust`, 0046): cuando exista
+`PermisoExcepcion` formal, se conecta ahí, no antes. El cobro de upgrade y
+la compensación de downgrade reusan `register_stay_transaction()` (0026)
+-- no dependen de que Caja (0046) esté desplegada, tal como se pidió. La
+compensación de downgrade se registra como `type='payment'` con monto
+negativo (no `'refund'`, que en este ledger es positivo -- ver comentario
+completo en la migración); "quién autorizó" es
+`room_assignments.created_by` (ya `auth.uid()` vía el trigger genérico),
+sin columna nueva.
+
+Server Action: `changeRoomWithAuthorization()`
+(`src/modules/recepcion/actions/lifecycle.ts`) + `submitChangeRoom()`
+(`src/app/recepcion/actions.ts`). Query nueva: `listRoomChangeOptions()`
+(`src/modules/recepcion/queries/stays.ts`) -- a diferencia de
+`listRoomAssignmentOptions()` (sólo para el check-in guiado, excluye
+downgrades a propósito), ésta sí los incluye. UI: sección "Cambio de
+habitación" en `/recepcion?stayId=X&roomChangeStep=1` (ver P0-5).
+
+**Validado localmente** (Postgres 16, `has_permission` real): upgrade con
+cobro ($300) sube el saldo exactamente ese monto; upgrade de cortesía no
+mueve el saldo aunque se mande un `charge_amount` por error (se ignora);
+downgrade con compensación ($200) baja el saldo exactamente ese monto,
+registrado como `payment` negativo; upgrade/downgrade sin motivo rechaza
+con `REASON_REQUIRED`; un rol sin `room.change` rechaza con
+`PERMISSION_DENIED`. Pendiente de repetir contra Supabase real una vez
+aplicada `0051` (ver reporte de esta ronda).
+
+### P0-5: el menú de una estancia ya no ofrecía sólo lo válido para su estado
+
+Encontrado real: el modal de detalle de celda del Rack
+(`RackGrid.tsx`, `openCell`) tenía **tres enlaces idénticos** ("Expediente"
+/ "Check-In" / "Cobrar"), los tres a la misma URL, sin condicionar en
+absoluto por `cell.stayStatus` -- "Check-In" aparecía siempre, incluso
+para una estancia ya `in_house`. La tarjeta principal de
+`/recepcion?stayId=X` sí condicionaba bien sus botones (`Registrar
+llegada`/`Marcar No-Show`/`Marcar Walked`/`Entregar habitación`/`Hacer
+check-out`, cada uno sólo para su estado) -- el bug era específico del
+modal del Rack.
+
+Corregido: "Check-In" sólo para `expected`/`arrived`; "Cambio de
+habitación" (nuevo, P0-3) sólo para `checked_in`/`in_house`, enlazando a
+`?roomChangeStep=1`; "Cobrar" para cualquier estado con cuenta activa. Se
+agregó también el mismo botón "Cambio de habitación" a la tarjeta
+principal de acciones de Recepción, junto a los demás, condicionado igual.
+
+### P0-6: el buscador ignoraba por completo ocupantes/mascotas
+
+`searchAvailableOptions()` (`src/modules/reservaciones/queries/
+availability.ts`) sólo filtraba por fechas -- `paxAdults`/`paxChildren`/
+`hasPets` se leían del formulario pero nunca llegaban a la consulta.
+Cambiar esos campos SÍ disparaba una navegación nueva (es un `<form
+method="GET">`), pero el resultado no cambiaba: un tipo sin capacidad para
+6 adultos, o que no acepta mascotas, seguía apareciendo igual que con los
+filtros por defecto. Corregido agregando esos tres filtros a la función
+(compara contra `room_types.capacity_adults`/`capacity_children`/
+`accepts_pets`, ya leídos, nunca antes usados para filtrar) y pasándolos
+desde `reservaciones/page.tsx`. Validado en vivo contra Hotel Demo: sin
+filtro de mascotas, 4 tipos disponibles; con mascotas, sólo 2 (los que
+`accepts_pets`); con 6 adultos, 0 (ningún tipo tiene esa capacidad) --
+antes de este fix los tres casos habrían mostrado los mismos 4 tipos.
+
+### P0-7: el precio deja de ser un campo libre
+
+`create_quote_option()` (0048) aceptaba `p_nightly_rate_override` de
+cualquier usuario con `reservations.create`, sin motivo ni permiso
+adicional. `0052_quote_discount_authorization.sql` la recrea (mismo
+patrón 0037/0047: se quita/agrega parámetro de la firma, nunca se ignora)
+agregando `p_is_courtesy`/`p_discount_reason`: si el override difiere de
+`base_rate`, o se pide cortesía, exige
+`has_permission(hotel_id, 'reservations.discount')` (permiso nuevo,
+sembrado sólo a `hotel_admin` -- mismo criterio que `cash.refund`/
+`cash.adjust`, no a `front_desk`) + motivo no vacío, antes de calcular
+nada. Cortesía dejó el precio en 0. "Quién autorizó" sigue siendo
+`quote_options.created_by`; motivo/monto/cortesía se registran en el
+payload del evento de timeline (`quote.discount_authorized` en vez de
+`quote.issued`) -- regla 6, no una columna nueva.
+
+UI (`reservaciones/page.tsx`): el campo "Tarifa/noche" ahora es de sólo
+lectura (el precio de lista); un `<details>` colapsable "Descuento o
+cortesía" con el override + cortesía + motivo sólo se muestra si
+`hasPermission(hotelId, 'reservations.discount')` -- oculta el control a
+quien igual sería rechazado por el servidor (sólo UX, la autorización real
+sigue siendo el RPC).
+
+**Validado localmente**: `hotel_admin` sin override cotiza a `base_rate`
+sin pedir nada; con override y sin motivo, rechaza
+`DISCOUNT_REASON_REQUIRED`; con override y motivo, cotiza al nuevo precio;
+con cortesía, total `0.00`; `front_desk` con override y motivo rechaza
+`PERMISSION_DENIED` (no tiene `reservations.discount`); `front_desk` sin
+override sigue cotizando normal, sin regresión. Pendiente de repetir
+contra Supabase real una vez aplicada `0052`.
+
+### P0-8: era presentación, no cálculo -- confirmado explícitamente
+
+Se verificó primero si el saldo mismo estaba mal calculado: no -- en cada
+prueba de esta ronda (incluidas las de P0-3, cobro/compensación),
+`stay_accounts.balance` reflejó exactamente el monto esperado tras cada
+movimiento. El problema real era de presentación: la tarjeta "Cuenta de la
+estancia" (`/recepcion`) mostraba `${balance}` crudo, con sólo el color
+como pista -- un saldo a favor real se habría visto como `$-345`.
+
+`formatBalanceLabel()` ya existía, pero sólo dentro de Caja
+(`modules/caja/queries/payments.ts`) -- Recepción necesitaba la misma
+traducción sin depender de que Caja esté desplegada (pedido explícito), y
+regla 7 prohíbe importar entre módulos. Se movió a `src/lib/format.ts`
+(ya comparte `formatDate*` entre módulos) y Caja ahora la reexporta desde
+ahí -- una sola implementación, no dos (regla 6). Recepción la usa en las
+tres vistas donde mostraba el saldo crudo (tarjeta de cuenta, paso 1 del
+check-in guiado, resumen de la lista de estancias) y agrega "Total
+cargos"/"Total abonos" en la tarjeta principal, derivados del signo real
+de cada transacción (positivo/negativo), no de su `type` -- cubre
+`charge`/`refund`/`payment`/`adjustment` por igual sin listar tipos a
+mano.
 
 ## Convenciones de nombres
 
