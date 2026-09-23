@@ -16,6 +16,8 @@ export interface CreateQuoteInput {
   checkIn: string;
   checkOut: string;
   nightlyRateOverride?: number;
+  isCourtesy?: boolean;
+  discountReason?: string;
   channel?: string;
 }
 
@@ -25,12 +27,17 @@ export interface CreateQuoteInput {
  * la opción y pedir el Hold (ver actions/hold.ts).
  *
  * quote_options ya no acepta INSERT directo del cliente (auditoría de
- * precio, Tier 2, ver CLAUDE.md): create_quote_option() (0048) es el único
- * camino de escritura y calcula subtotal/taxes/total server-side a partir
- * de room_types.base_rate + hotel_policies.iva_porcentaje -- ningún
- * parámetro de precio ya hecho llega desde aquí, sólo
- * nightlyRateOverride (la tarifa negociada que el staff puede capturar,
- * UX existente).
+ * precio, Tier 2, ver CLAUDE.md): create_quote_option() (0048/0052) es el
+ * único camino de escritura y calcula subtotal/taxes/total server-side a
+ * partir de room_types.base_rate + hotel_policies.iva_porcentaje.
+ *
+ * P0-7 (handoff de demo): nightlyRateOverride/isCourtesy ya no son un
+ * campo libre -- la función SQL exige has_permission(hotelId,
+ * 'reservations.discount') + discountReason no vacío en cuanto el override
+ * difiere de base_rate o se pide cortesía; sin permiso, el RPC rechaza con
+ * PERMISSION_DENIED antes de tocar nada. "Quién autorizó" es
+ * quote_options.created_by (ya auth.uid()); motivo/monto/cortesía se
+ * registran aquí en el payload del timeline, no en una columna nueva.
  */
 export async function createQuote(input: CreateQuoteInput) {
   await requirePermission(input.hotelId, "reservations.create");
@@ -83,16 +90,29 @@ export async function createQuote(input: CreateQuoteInput) {
     p_children: input.paxChildren,
     p_has_pets: input.hasPets,
     p_nightly_rate_override: input.nightlyRateOverride ?? null,
+    p_is_courtesy: input.isCourtesy ?? false,
+    p_discount_reason: input.discountReason ?? null,
   });
   if (optionError) throw optionError;
 
+  const isDiscounted = Boolean(input.isCourtesy) || Boolean(input.discountReason);
   await logTimelineEvent({
     hotelId: input.hotelId,
     module: "reservations",
-    eventType: "quote.issued",
+    eventType: isDiscounted ? "quote.discount_authorized" : "quote.issued",
     entityType: "quote",
     entityId: quote.id,
-    payload: { lead_id: lead.id, quote_option_id: option.id, total: option.total },
+    payload: {
+      lead_id: lead.id,
+      quote_option_id: option.id,
+      total: option.total,
+      ...(isDiscounted && {
+        is_courtesy: input.isCourtesy ?? false,
+        nightly_rate_override: input.nightlyRateOverride ?? null,
+        discount_reason: input.discountReason ?? null,
+        authorized_by: user.id,
+      }),
+    },
   });
 
   return { leadId: lead.id as string, quoteId: quote.id as string, quoteOptionId: option.id as string };

@@ -51,15 +51,38 @@ export interface AvailableOption {
   minAvailable: number;
 }
 
+export interface SearchAvailableOptionsFilters {
+  paxAdults?: number;
+  paxChildren?: number;
+  hasPets?: boolean;
+}
+
 /**
  * Disponibilidad de TODOS los tipos activos para un rango de fechas, con su
  * tarifa base de Configuración como precio de referencia -- reemplaza el
  * "escribe tú la tarifa a mano para un solo tipo" por ver de una vez qué hay
  * disponible y a qué precio de partida (spec S15, ver CLAUDE.md Módulo 04
  * sobre por qué base_rate no se conectaba automáticamente hasta ahora).
+ *
+ * P0-6 (handoff de demo): filtra también por ocupantes/mascotas -- antes
+ * esta función ignoraba por completo paxAdults/paxChildren/hasPets (sólo
+ * miraba fechas), así que cambiar esos campos en el buscador no invalidaba
+ * nada: se seguía mostrando un tipo que no acepta mascotas, o que no cabe
+ * para la cantidad de personas pedida, con el mismo resultado de antes.
  */
-export async function searchAvailableOptions(hotelId: string, checkIn: string, checkOut: string): Promise<AvailableOption[]> {
-  const roomTypes = await listRoomTypes(hotelId);
+export async function searchAvailableOptions(
+  hotelId: string,
+  checkIn: string,
+  checkOut: string,
+  filters: SearchAvailableOptionsFilters = {},
+): Promise<AvailableOption[]> {
+  const paxAdults = filters.paxAdults ?? 1;
+  const paxChildren = filters.paxChildren ?? 0;
+  const hasPets = filters.hasPets ?? false;
+
+  const roomTypes = (await listRoomTypes(hotelId)).filter(
+    (rt) => rt.capacity_adults >= paxAdults && rt.capacity_children >= paxChildren && (!hasPets || rt.accepts_pets),
+  );
   const nights = Math.max(1, Math.round((new Date(checkOut).getTime() - new Date(checkIn).getTime()) / 86400000));
 
   const results = await Promise.all(

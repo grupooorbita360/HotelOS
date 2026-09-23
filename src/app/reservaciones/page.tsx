@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
+import { hasPermission } from "@/lib/auth/permissions";
 import { getHotelFeatures } from "@/lib/auth/platform";
 import { signOut } from "@/app/login/actions";
 import { formatDate, formatDateRange, formatDateTime } from "@/lib/format";
@@ -137,8 +138,18 @@ export default async function ReservacionesPage({
 
   const availableOptions =
     !quoteOption && !hold && params.checkIn && params.checkOut && !searchDateError
-      ? await searchAvailableOptions(hotel.hotelId, params.checkIn, params.checkOut)
+      ? await searchAvailableOptions(hotel.hotelId, params.checkIn, params.checkOut, {
+          paxAdults: Number(params.adults ?? "1"),
+          paxChildren: Number(params.children ?? "0"),
+          hasPets: params.hasPets === "on",
+        })
       : null;
+
+  // P0-7 (handoff de demo): el precio deja de ser editable libremente --
+  // sólo quien tiene reservations.discount ve el control de "Descuento o
+  // cortesía". Es sólo UX (oculta un control que igual rechazaría el
+  // servidor); la autorización real vive en create_quote_option() (0052).
+  const canDiscount = availableOptions ? await hasPermission(hotel.hotelId, "reservations.discount") : false;
 
   // Solo lo que el buscador de huesped (Client Component) necesita -- no cruza
   // el limite servidor/cliente el resto de cada fila de lead (fechas, canal, etc.).
@@ -499,10 +510,26 @@ export default async function ReservacionesPage({
                             <input type="hidden" name="guestEmail" value={params.guestEmail ?? ""} />
                             <input type="hidden" name="guestPhone" value={params.guestPhone ?? ""} />
                             <Field label="Tarifa/noche" className="w-32">
-                              <TextInput name="nightlyRate" type="number" min={0} step="0.01" defaultValue={opt.baseRate} />
+                              <TextInput readOnly defaultValue={`$${opt.baseRate}`} />
                             </Field>
                             <Button>Reservar</Button>
                             <CopyQuoteButton text={quoteText} />
+                            {canDiscount && (
+                              <details className="w-full text-xs">
+                                <summary className="cursor-pointer text-brand underline">Descuento o cortesía</summary>
+                                <div className="mt-2 flex flex-wrap items-end gap-3 rounded-lg border border-border p-3">
+                                  <Field label="Nueva tarifa/noche" className="w-32">
+                                    <TextInput name="nightlyRate" type="number" min={0} step="0.01" placeholder={String(opt.baseRate)} />
+                                  </Field>
+                                  <label className="flex items-end gap-2 pb-2.5 text-muted-strong">
+                                    <input type="checkbox" name="isCourtesy" className="h-4 w-4" /> Cortesía (sin costo)
+                                  </label>
+                                  <Field label="Motivo (obligatorio si autorizas)" className="min-w-[220px] flex-1">
+                                    <TextInput name="discountReason" placeholder="Ej. cliente frecuente, compensación…" />
+                                  </Field>
+                                </div>
+                              </details>
+                            )}
                           </form>
                         </div>
                       );
