@@ -9,6 +9,7 @@ export interface PlatformHotelRow {
   plan: string;
   status: string;
   timezone: string;
+  is_demo: boolean;
   created_at: string;
   license: {
     rooms_max: number | null;
@@ -29,7 +30,7 @@ export async function listPlatformHotels(): Promise<PlatformHotelRow[]> {
 
   const { data: hotels, error } = await supabase
     .from("hotels")
-    .select("id, name, slug, plan, status, timezone, created_at, hotel_licenses(rooms_max, users_max, expires_at, notes)")
+    .select("id, name, slug, plan, status, timezone, is_demo, created_at, hotel_licenses(rooms_max, users_max, expires_at, notes)")
     .order("created_at", { ascending: true });
   if (error) throw error;
 
@@ -51,6 +52,7 @@ export async function listPlatformHotels(): Promise<PlatformHotelRow[]> {
       plan: hotel.plan,
       status: hotel.status,
       timezone: hotel.timezone,
+      is_demo: hotel.is_demo,
       created_at: hotel.created_at,
       license,
       usage: usage as HotelLimitUsage | null,
