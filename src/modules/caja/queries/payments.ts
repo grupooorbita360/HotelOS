@@ -106,11 +106,10 @@ export async function getReservationBalance(hotelId: string, reservationId: stri
   return { totalVendido, yaPagado, saldo: totalVendido - yaPagado };
 }
 
-export function formatBalanceLabel(saldo: number): string {
-  if (saldo > 0) return `Falta por pagar $${saldo.toFixed(2)}`;
-  if (saldo < 0) return `Saldo a favor $${Math.abs(saldo).toFixed(2)}`;
-  return "Cuenta liquidada";
-}
+// formatBalanceLabel() se movió a src/lib/format.ts (P0-8, handoff de
+// demo): Recepción necesitaba la misma traducción para stay_accounts.balance
+// sin depender de que Caja esté desplegada -- regla 6, un solo lugar.
+export { formatBalanceLabel } from "@/lib/format";
 
 export interface ReservationPayment {
   id: string;

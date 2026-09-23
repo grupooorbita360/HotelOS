@@ -16,3 +16,17 @@ export function formatDateTime(iso: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString("es-MX", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+/**
+ * Traduce un saldo con signo a lenguaje simple -- nunca se muestra un
+ * número negativo crudo al usuario (ej. "-$345"). Ya existía sólo dentro
+ * de Caja (`modules/caja/queries/payments.ts`); se movió aquí (P0-8,
+ * handoff de demo) porque Recepción tiene el mismo problema con
+ * `stay_accounts.balance` y no depende de que Caja esté desplegada --
+ * regla 6, un solo lugar para esta traducción en vez de duplicarla.
+ */
+export function formatBalanceLabel(saldo: number): string {
+  if (saldo > 0) return `Falta por pagar $${saldo.toFixed(2)}`;
+  if (saldo < 0) return `Saldo a favor $${Math.abs(saldo).toFixed(2)}`;
+  return "Cuenta liquidada";
+}
