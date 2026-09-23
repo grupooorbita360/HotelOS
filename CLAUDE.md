@@ -215,6 +215,29 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0046_caja_module.sql` | Módulo Caja: `payment_methods`, `payment_movements`, `cash_settings`, `cash_shifts`, `cash_movements`; extiende `payments`/`stay_transactions` (aditivo); funciones `register_payment_with_movements()`/`register_refund()`/`validate_payment()`/`register_stay_adjustment()`/`open_cash_shift()`/`close_cash_shift()`/`register_cash_expense()`; `hotels.moneda_base` (ver sección de Caja) |
 | `0047_pricing_source_of_truth_tier1.sql` | Fuente única de precio (Tier 1, auditoría externa): `confirm_reservation_from_hold()` pierde `p_rate_total` -- `rate_total` se deriva siempre de `quote_options.total` vía `inventory_holds.quote_option_id`, nunca de un parámetro que el caller pudiera mandar (ver sección "Fuente única de precio") |
 | `0048_quote_options_no_client_insert.sql` | Fuente única de precio (Tier 2): retira la política de `INSERT`/`UPDATE` de cliente en `quote_options`; único camino de escritura es `create_quote_option()` (`SECURITY DEFINER`), que calcula `subtotal`/`taxes`/`total` server-side -- ningún parámetro de precio ya hecho (ver sección "Fuente única de precio") |
+| _(0049 no existe -- hueco intencional, ver nota debajo de esta tabla)_ | |
+| `0050_demo_hotel_seed_reset.sql` | `reset_demo_hotel()`: borra y re-siembra el hotel `hotel-demo` con ~7 semanas de historial anclado a `current_date` (ocupación, ADR, ingresos, no-show, cancelaciones, estancias in-house, solicitudes/incidencias/activos, timeline real). Sólo `platform_admin`. Botón manual en `/admin` → tab "Demo" (`resetDemoHotel()`/`submitResetDemoHotel()`). Traída desde la rama `feature/demo-reset` -- ya estaba aplicada en producción antes de fusionarse a esta rama (ver nota debajo) |
+
+**Nota sobre el hueco en 0049 y la reconciliación de `feature/demo-reset`
+(commit `2ab7580`):** `feature/demo-reset` es una rama remota que se
+bifurcó de un commit anterior a que esta rama agregara `0041`-`0048` --
+nunca vio ese trabajo, y esta rama nunca había visto la suya. Su autor
+escribió `0050_demo_hotel_seed_reset.sql` sabiendo (por haber consultado
+Supabase real, no el repo) que `0041`/`0042` ya estaban aplicadas en
+producción aunque no las viera en su propio árbol de archivos, y dejó
+`0049` como hueco deliberado a propósito ("deja hueco a 0040... y a
+0041/0042 que existen en producción... aunque aún no estén commiteadas
+en el repo", comentario original del archivo). Se confirmó (auditoría
+externa + verificación en vivo contra Supabase) que `reset_demo_hotel()`
+ya corría en producción desde antes de esta fusión -- fusionar esta rama
+NO aplicó nada nuevo a la base de datos, sólo la deja versionada aquí.
+Único conflicto real al fusionar: dos tabs nuevas e independientes en
+`src/app/admin/page.tsx` (`Auditoría` de esta rama, `Demo` de
+`feature/demo-reset`) insertadas en el mismo punto del archivo --
+resuelto conservando ambas, sin pérdida de ninguna. `0049` queda vacío a
+propósito, documentado aquí para que ninguna sesión futura intente
+reusar ese número: el primer número real y libre para migraciones nuevas
+es **`0051`**.
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -1493,6 +1516,21 @@ Decisiones de modelo comercial multi-tenant:
   error dice cómo reintentar. La tabla de /admin muestra el dueño activo
   de cada hotel y permite asignarlo/reasignarlo y reenviar la invitación
   (`assignHotelOwner` / `resendOwnerInvite`, PR #6).
+- **Hotel Demo (`/admin` → tab "Demo", `0050`):** la demo vive como un
+  hotel más (`slug = 'hotel-demo'`) -- mismo código, misma base, aislado
+  sólo por la RLS multi-tenant que ya existe, sin infraestructura
+  paralela. `reset_demo_hotel()` (`SECURITY DEFINER`, sólo
+  `platform_admin`) borra todo el dato operativo de ese hotel y lo
+  re-siembra con ~7 semanas de historial ancladas a `current_date` para
+  que la demo se vea viva (ocupación/ADR/revPAR con historia,
+  llegadas/estancias en curso, incidencias, timeline real). Reset manual
+  a propósito en esta fase (un reset automático destruiría lo que el
+  equipo genera explorando) -- la misma función puede programarse como
+  cron cuando la demo sea pública. Esta migración se escribió en una
+  rama distinta (`feature/demo-reset`) que se bifurcó antes de que este
+  branch agregara `0041`-`0048`; se reconcilió trayendo `0050` tal cual
+  (ya estaba aplicada en producción) -- ver la nota junto a la tabla de
+  migraciones sobre el hueco en `0049`.
 
 ## Fecha operativa del hotel (businessDate)
 
