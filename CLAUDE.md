@@ -220,6 +220,7 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0051_authorized_room_change.sql` | `change_room_with_authorization()` -- upgrade/downgrade de habitación después del check-in, con cobro/cortesía/compensación (P0-3, ver "Handoff de demo P0") |
 | `0052_quote_discount_authorization.sql` | `create_quote_option()` gana `p_is_courtesy`/`p_discount_reason` -- exige `reservations.discount` + motivo para cotizar fuera de la tarifa de lista (P0-7, ver "Handoff de demo P0") |
 | `0053_fix_reset_demo_hotel_leads_fk.sql` | Fix real: `reset_demo_hotel()` (0050) borraba `reservations` antes de desvincular `leads.reservation_id` -- fallaba con violación de FK en cuanto el hotel demo real acumulaba algún lead convertido por uso genuino de la app (ver "Handoff de demo P0") |
+| `0054_fix_reset_demo_hotel_holds_fk.sql` | Mismo problema que 0053, columna distinta: `inventory_holds.converted_reservation_id` (que `confirm_reservation_from_hold()`, 0016, fija en TODO Hold confirmado) tampoco se desvinculaba antes del wipe -- más grave que 0053 porque no es un caso raro, es el camino normal de confirmar una reserva (ver "Handoff de demo P0") |
 
 **Nota sobre el hueco en 0049 y la reconciliación de `feature/demo-reset`
 (commit `2ab7580`):** `feature/demo-reset` es una rama remota que se
@@ -2213,6 +2214,29 @@ borrando dos líneas después, sin cambio. Mismo `create or replace`, sin
 tocar la firma ni el resto del cuerpo (recreación completa de la función
 porque no hay forma de insertar una sola línea en medio de un `CREATE OR
 REPLACE FUNCTION` ya aplicado sin repetir el cuerpo entero).
+
+**Segundo hallazgo de la misma familia, en la misma ronda de pruebas
+(reset inmediato después de aplicar 0053):** el reset volvió a fallar,
+ahora con `inventory_holds_converted_reservation_id_fkey`.
+`confirm_reservation_from_hold()` (0016) fija SIEMPRE
+`inventory_holds.status = 'converted'` +
+`converted_reservation_id = <la reserva recién creada>` en cada
+confirmación real -- es decir, TODO Hold confirmado por el flujo normal
+deja esta referencia, no sólo un caso raro como el lead convertido. Mismo
+patrón, mismo tipo de FK sin `on delete` (0018). Se descartó reordenar el
+bloque completo de `DELETE`s (`inventory_holds` también depende de
+`quote_options` sin cascada -- reordenar a ciegas podía introducir un
+problema distinto) a favor de la misma corrección quirúrgica: desvincular
+antes de borrar. Corregido en `0054_fix_reset_demo_hotel_holds_fk.sql`.
+Se verificó además, revisando todas las FK sin `on delete` que apuntan a
+`hotels`/`reservations`/`leads`/`inventory_holds`/`quote_options`/`quotes`/
+`reservation_stays` en el esquema completo, que no queda un tercer caso de
+este tipo: las únicas dos referencias "hacia atrás" contra `reservations`
+son exactamente `leads.reservation_id` (0053) e
+`inventory_holds.converted_reservation_id` (0054) -- el resto de FKs sin
+cascada encontradas (`reservations.lead_id`/`.quote_id`/`.hold_id`) son en
+sentido contrario (reservations es la fila hija ahí, ya se borra primero
+en el wipe), así que no bloquean nada.
 
 ## Convenciones de nombres
 
