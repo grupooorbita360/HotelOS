@@ -7,8 +7,10 @@
 -- cron (misma función; ver nota al final).
 --
 -- Qué hace public.reset_demo_hotel():
---   1. Asegura el hotel slug='hotel-demo' (lo crea si no existe) con licencia
---      sin límites y plan 'pro' (la demo muestra el producto completo).
+--   1. Asegura el hotel demo (hotels.is_demo = true, ver 0051; el slug
+--      'hotel-demo' queda sólo como identificador legible) — lo crea si no
+--      existe, con licencia sin límites y plan 'pro' (la demo muestra el
+--      producto completo).
 --   2. Borra TODO el dato operativo de ese hotel (jamás toca otros hoteles
 --      ni membresías: la cuenta demo sigue funcionando tras el reset).
 --   3. Re-semea desde cero, con fechas ANCLADAS A current_date para que la
@@ -37,6 +39,10 @@
 -- que existen en producción (con columnas nuevas en room_types:
 -- base_rate, base_adults, max_adults, max_children, max_pets, description,
 -- orden_comercial, photos) aunque aún no estén commiteadas en el repo.
+--
+-- Dependencia: esta función referencia hotels.is_demo (agregada en 0051).
+-- plpgsql planea las consultas en la primera EJECUCIÓN, no al crear la
+-- función, así que aplicar 0050 -> 0051 en orden es suficiente.
 
 -- ============================================================
 -- reset_demo_hotel()
@@ -75,10 +81,12 @@ begin
   end if;
 
   -- ── 1. Hotel demo ────────────────────────────────────────────────────
-  select id into v_hotel_id from public.hotels where slug = 'hotel-demo';
+  -- Fuente de verdad: hotels.is_demo (0051). El slug 'hotel-demo' se
+  -- conserva al crearlo como identificador legible, no como flag.
+  select id into v_hotel_id from public.hotels where is_demo;
   if not found then
-    insert into public.hotels (name, slug, plan, status, timezone, country)
-    values ('Hotel Demo', 'hotel-demo', 'pro', 'active', 'America/Cancun', 'México')
+    insert into public.hotels (name, slug, plan, status, timezone, country, is_demo)
+    values ('Hotel Demo', 'hotel-demo', 'pro', 'active', 'America/Cancun', 'México', true)
     returning id into v_hotel_id;
     -- reception_settings y hotel_policies nacen por trigger (0020/0007).
   end if;
@@ -473,7 +481,7 @@ end;
 $$;
 
 comment on function public.reset_demo_hotel() is
-  'Borra y regenera el Hotel Demo (slug hotel-demo) con ~7 semanas de historial realista. Sólo platform_admin. Idempotente y atómico.';
+  'Borra y regenera el Hotel Demo (hotels.is_demo = true) con ~7 semanas de historial realista. Sólo platform_admin. Idempotente y atómico.';
 
 -- Higiene de grants (auditoría M-1): EXECUTE sólo para authenticated.
 revoke execute on function public.reset_demo_hotel() from public, anon;
