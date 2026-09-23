@@ -217,6 +217,9 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0048_quote_options_no_client_insert.sql` | Fuente única de precio (Tier 2): retira la política de `INSERT`/`UPDATE` de cliente en `quote_options`; único camino de escritura es `create_quote_option()` (`SECURITY DEFINER`), que calcula `subtotal`/`taxes`/`total` server-side -- ningún parámetro de precio ya hecho (ver sección "Fuente única de precio") |
 | _(0049 no existe -- hueco intencional, ver nota debajo de esta tabla)_ | |
 | `0050_demo_hotel_seed_reset.sql` | `reset_demo_hotel()`: borra y re-siembra el hotel `hotel-demo` con ~7 semanas de historial anclado a `current_date` (ocupación, ADR, ingresos, no-show, cancelaciones, estancias in-house, solicitudes/incidencias/activos, timeline real). Sólo `platform_admin`. Botón manual en `/admin` → tab "Demo" (`resetDemoHotel()`/`submitResetDemoHotel()`). Traída desde la rama `feature/demo-reset` -- ya estaba aplicada en producción antes de fusionarse a esta rama (ver nota debajo) |
+| `0051_authorized_room_change.sql` | `change_room_with_authorization()` -- upgrade/downgrade de habitación después del check-in, con cobro/cortesía/compensación (P0-3, ver "Handoff de demo P0") |
+| `0052_quote_discount_authorization.sql` | `create_quote_option()` gana `p_is_courtesy`/`p_discount_reason` -- exige `reservations.discount` + motivo para cotizar fuera de la tarifa de lista (P0-7, ver "Handoff de demo P0") |
+| `0053_fix_reset_demo_hotel_leads_fk.sql` | Fix real: `reset_demo_hotel()` (0050) borraba `reservations` antes de desvincular `leads.reservation_id` -- fallaba con violación de FK en cuanto el hotel demo real acumulaba algún lead convertido por uso genuino de la app (ver "Handoff de demo P0") |
 
 **Nota sobre el hueco en 0049 y la reconciliación de `feature/demo-reset`
 (commit `2ab7580`):** `feature/demo-reset` es una rama remota que se
@@ -2181,6 +2184,35 @@ cargos"/"Total abonos" en la tarjeta principal, derivados del signo real
 de cada transacción (positivo/negativo), no de su `type` -- cubre
 `charge`/`refund`/`payment`/`adjustment` por igual sin listar tipos a
 mano.
+
+### Bug real encontrado preparando las pruebas: `reset_demo_hotel()` no podía limpiar un hotel con uso real (0053)
+
+Al intentar partir de un estado limpio para probar P0-3/P0-7 en vivo (tal
+como esta ronda lo exigía), `reset_demo_hotel()` (0050) falló contra el
+Hotel Demo real con `update or delete on table "reservations" violates
+foreign key constraint "leads_reservation_id_fkey"`. Causa: el hotel demo
+real ya tenía, por uso genuino de la app (no del seed -- 0050 nunca
+inserta `leads`), algún `lead` con `status='converted'` y
+`reservation_id` apuntando a una reserva de ese hotel; el orden de
+limpieza de 0050 borra `reservations` (línea 103) antes que `leads`
+(línea 107), y `leads.reservation_id` (0018) no tiene `on delete
+cascade`/`set null` -- Postgres rechaza el `DELETE` de la reserva
+mientras exista un lead convertido que la referencie. Nunca se detectó
+antes porque las pruebas de 0050 se hicieron contra un hotel demo recién
+creado, sin leads convertidos todavía; sólo se manifiesta después de que
+el hotel demo real acumula uso genuino entre un reset y el siguiente --
+exactamente el mismo tipo de hallazgo que la sección de Rack ya documentó
+para la migración `0033` sin aplicar ("que este archivo documente que
+algo ya se validó no es garantía de que el proyecto real esté en ese
+estado").
+
+Corregido en `0053_fix_reset_demo_hotel_leads_fk.sql`: antes de borrar
+`reservations`, desvincula (`reservation_id = null`) cualquier lead del
+hotel que apunte a una de sus reservas -- el lead en sí se sigue
+borrando dos líneas después, sin cambio. Mismo `create or replace`, sin
+tocar la firma ni el resto del cuerpo (recreación completa de la función
+porque no hay forma de insertar una sola línea en medio de un `CREATE OR
+REPLACE FUNCTION` ya aplicado sin repetir el cuerpo entero).
 
 ## Convenciones de nombres
 
