@@ -5,6 +5,7 @@ import {
   registerArrival,
   checkIn,
   assignRoomForCheckin,
+  changeRoomWithAuthorization,
   deliverRoom,
   markNoShow,
   markWalked,
@@ -18,19 +19,19 @@ import {
   resolveStayIncident,
   setDeliveredAsset,
 } from "@/modules/recepcion/actions/service";
+import { friendlyErrorMessage } from "@/lib/friendlyError";
 
 function stayUrl(stayId: string, extra = "") {
   return `/recepcion?stayId=${stayId}${extra}`;
 }
 
-async function runOrError(stayId: string, fn: () => Promise<unknown>) {
+async function runOrError(stayId: string, fn: () => Promise<unknown>, redirectExtra = "") {
   try {
     await fn();
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido";
-    redirect(stayUrl(stayId, `&error=${encodeURIComponent(message)}`));
+    redirect(stayUrl(stayId, `&error=${encodeURIComponent(friendlyErrorMessage(error))}`));
   }
-  redirect(stayUrl(stayId));
+  redirect(stayUrl(stayId, redirectExtra));
 }
 
 export async function submitRegisterArrival(formData: FormData) {
@@ -61,6 +62,32 @@ export async function submitCheckInWithRoom(formData: FormData) {
     await checkIn(hotelId, stayId);
     await assignRoomForCheckin(hotelId, stayId, roomId);
   });
+}
+
+/** Cambio de habitación autorizado (upgrade/downgrade) para una estancia YA con check-in (P0-3/P0-5, handoff de demo). */
+export async function submitChangeRoom(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const stayId = String(formData.get("stayId"));
+  const roomId = String(formData.get("roomId"));
+  const reason = String(formData.get("reason") || "") || undefined;
+  const isCourtesy = formData.get("isCourtesy") === "on";
+  const chargeAmountRaw = formData.get("chargeAmount");
+  const compensationAmountRaw = formData.get("compensationAmount");
+
+  try {
+    await changeRoomWithAuthorization(hotelId, stayId, roomId, {
+      reason,
+      isCourtesy,
+      chargeAmount: chargeAmountRaw ? Number(chargeAmountRaw) : undefined,
+      compensationAmount: compensationAmountRaw ? Number(compensationAmountRaw) : undefined,
+    });
+  } catch (error) {
+    // Se queda en el mismo paso (roomChangeStep=1) para que el formulario
+    // siga visible al reintentar -- volver a "Cuenta de la estancia" sin
+    // el error visible sería confuso.
+    redirect(stayUrl(stayId, `&roomChangeStep=1&error=${encodeURIComponent(friendlyErrorMessage(error))}`));
+  }
+  redirect(stayUrl(stayId));
 }
 
 export async function submitDeliverRoom(formData: FormData) {

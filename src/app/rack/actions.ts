@@ -1,8 +1,8 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import { assignRoomFromRack } from "@/modules/rack/actions/assignments";
+import { friendlyErrorMessage } from "@/lib/friendlyError";
 
 function rackUrl(params: Record<string, string | undefined>) {
   const qs = new URLSearchParams();
@@ -28,10 +28,10 @@ export async function submitAssignUnassigned(formData: FormData) {
   try {
     await assignRoomFromRack(hotelId, stayId, roomId);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido";
-    redirect(rackUrl({ ...backParams, error: message }));
+    redirect(rackUrl({ ...backParams, error: friendlyErrorMessage(error) }));
   }
 
-  revalidatePath("/rack");
+  // revalidatePath("/rack") ya corre dentro de assignRoomFromRack() (P0-4,
+  // handoff de demo) -- no se duplica aquí.
   redirect(rackUrl(backParams));
 }
