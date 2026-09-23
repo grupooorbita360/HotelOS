@@ -1367,6 +1367,10 @@ export interface Database {
         Args: Record<PropertyKey, never>;
         Returns: number;
       };
+      reset_demo_hotel: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       can_deliver_room: {
         Args: { p_stay_id: string };
         Returns: { allowed: boolean; reason: string | null }[];

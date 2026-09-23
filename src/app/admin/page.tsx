@@ -23,6 +23,7 @@ import {
   submitResendOwnerInvite,
   submitSetFeatureOverride,
   submitRemoveFeatureOverride,
+  submitResetDemoHotel,
 } from "./actions";
 
 const FEATURE_LABELS: Record<string, string> = {
@@ -96,7 +97,7 @@ function auditDetail(eventType: string, payload: Record<string, unknown>): strin
 export default async function AdminPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; error?: string }>;
+  searchParams: Promise<{ tab?: string; error?: string; msg?: string }>;
 }) {
   const params = await searchParams;
   const tab = params.tab ?? "hoteles";
@@ -133,6 +134,8 @@ export default async function AdminPage({
   const catalogEnabled = (featureKey: string, plan: string) =>
     catalog.find((c) => c.feature_key === featureKey && c.plan === plan)?.enabled ?? false;
 
+  const demoHotel = hotels.find((h) => h.slug === "hotel-demo");
+
   return (
     <div className="min-h-screen bg-background px-6 py-8">
       <div className="mx-auto max-w-5xl space-y-6 text-sm">
@@ -151,6 +154,7 @@ export default async function AdminPage({
             { key: "hoteles", label: "Hoteles" },
             { key: "features", label: "Funciones por plan" },
             { key: "auditoria", label: "Auditoría" },
+            { key: "demo", label: "Demo" },
           ].map((t) => (
             <Link
               key={t.key}
@@ -165,6 +169,7 @@ export default async function AdminPage({
         </nav>
 
         {params.error && <Banner tone="danger">{params.error}</Banner>}
+        {params.msg && <Banner tone="success">{params.msg}</Banner>}
 
         {tab === "hoteles" && (
           <div className="space-y-6">
@@ -486,6 +491,55 @@ export default async function AdminPage({
                 </table>
               </div>
             )}
+          </Card>
+        )}
+
+        {tab === "demo" && (
+          <Card className="space-y-4">
+            <CardTitle>Hotel Demo</CardTitle>
+            <p className="text-xs text-muted">
+              La demo vive dentro de este proyecto como el hotel <code>hotel-demo</code>: mismo código, misma base
+              de datos, aislamiento garantizado por la RLS multi-tenant que ya existe. El botón borra todo el dato
+              operativo de ese hotel y lo regenera con ~7 semanas de historial anclado a la fecha actual:
+              estancias cerradas (ocupación, ADR, ingresos por día/semana), un no-show, cancelaciones, 3 estancias
+              en casa con saldos parciales, llegadas futuras, solicitudes, incidencias y timeline real para los
+              KPIs. No toca a otros hoteles ni las membresías: la cuenta demo sigue funcionando después.
+            </p>
+
+            {demoHotel ? (
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <Badge tone={STATUS_BADGE[demoHotel.status]?.tone ?? "neutral"}>
+                  {STATUS_BADGE[demoHotel.status]?.label ?? demoHotel.status}
+                </Badge>
+                <span>{planLabel(demoHotel.plan)}</span>
+                <span className="text-muted">
+                  {demoHotel.usage?.rooms_active ?? 0} habitaciones activas · slug{" "}
+                  <code>{demoHotel.slug}</code>
+                </span>
+              </div>
+            ) : (
+              <p className="text-xs text-muted">
+                El hotel <code>hotel-demo</code> aún no existe: el primer reinicio lo crea automáticamente (plan
+                Pro, sin límites, status activo).
+              </p>
+            )}
+
+            <form action={submitResetDemoHotel} className="space-y-3">
+              <label className="flex items-start gap-2 text-xs text-muted-strong">
+                <input type="checkbox" name="confirm" className="mt-0.5 accent-brand" />
+                Entiendo que se borran todos los datos del Hotel Demo y se regeneran desde cero. Esta acción no se
+                puede deshacer.
+              </label>
+              <Button type="submit" variant="secondary">
+                Reiniciar datos del Hotel Demo
+              </Button>
+            </form>
+
+            <p className="text-xs text-muted">
+              Reset manual a propósito: en la fase de pruebas un reset automático destruiría los datos que el
+              equipo genera explorando el sistema. Cuando la demo se vuelva pública, la misma función se puede
+              programar como cron nocturno (migración 0050, <code>public.reset_demo_hotel()</code>).
+            </p>
           </Card>
         )}
       </div>
