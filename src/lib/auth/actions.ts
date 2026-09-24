@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { SELECTED_HOTEL_COOKIE } from "@/lib/auth/session";
+import { LOCALE_COOKIE, type Locale } from "@/lib/i18n";
 
 /**
  * Cambia el hotel "actual" de la sesión (selector de AppShell, para
@@ -62,4 +63,32 @@ export async function selectHotel(formData: FormData) {
   }
 
   redirect(returnTo);
+}
+
+/**
+ * Cambia el idioma del "shell" de la app (AppShell -- ver `src/lib/i18n.ts`
+ * para el alcance exacto de esta ronda: sólo el chrome, no el contenido de
+ * cada módulo). Sin validación contra el servidor porque no hay nada que
+ * validar -- a diferencia de `selectHotel()`, esto no es un dato de acceso,
+ * cualquier valor fuera de "es"/"en" simplemente cae al español por default
+ * en `getLocale()`.
+ */
+export async function selectLocale(formData: FormData) {
+  const locale = String(formData.get("locale") ?? "es") as Locale;
+  const returnTo = String(formData.get("returnTo") ?? "/reservaciones");
+
+  const cookieStore = await cookies();
+  cookieStore.set(LOCALE_COOKIE, locale === "en" ? "en" : "es", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 365,
+  });
+
+  // Mismo motivo que en selectHotel(): sin esto, el Client Router Cache
+  // puede reusar el RSC ya prefetcheado en el idioma anterior.
+  revalidatePath("/", "layout");
+  const separator = returnTo.includes("?") ? "&" : "?";
+  redirect(`${returnTo}${separator}localeChangedAt=${Date.now()}`);
 }

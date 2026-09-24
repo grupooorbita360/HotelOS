@@ -11,7 +11,7 @@ import {
   setRoomActive,
   setRoomClean,
 } from "@/modules/configuracion/actions/rooms";
-import { updateHotelPolicies, updateReceptionSettings, updateBrandColor } from "@/modules/configuracion/actions/policies";
+import { updateHotelPolicies, updateReceptionSettings, updateBrandColor, updateBrandLogo } from "@/modules/configuracion/actions/policies";
 import { addStaffMember, changeStaffRole, setStaffActive } from "@/modules/configuracion/actions/staff";
 import { createPaymentMethod, setPaymentMethodActive, updateCashSettings } from "@/modules/configuracion/actions/payments";
 
@@ -140,6 +140,12 @@ export async function submitUpdateBrandColor(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const color = String(formData.get("brandColor") || "") || null;
   await runOrError("politicas", () => updateBrandColor(hotelId, color));
+}
+
+export async function submitUpdateBrandLogo(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const logoUrl = String(formData.get("logoUrl") || "").trim() || null;
+  await runOrError("politicas", () => updateBrandLogo(hotelId, logoUrl));
 }
 
 export async function submitAddStaffMember(formData: FormData) {

@@ -65,10 +65,12 @@ export default async function RackPage({
       <AppShell
         hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
+        userDisplayName={hotel.userDisplayName}
         roleName={hotel.roleName}
         current="rack"
         resetHref="/rack"
         brandColor={hotel.brandColor}
+        brandLogoUrl={hotel.brandLogoUrl}
         otherHotels={hotel.otherHotels}
         features={[...features]}
       >
@@ -124,10 +126,12 @@ export default async function RackPage({
     <AppShell
       hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
+      userDisplayName={hotel.userDisplayName}
       roleName={hotel.roleName}
       current="rack"
       resetHref="/rack"
       brandColor={hotel.brandColor}
+      brandLogoUrl={hotel.brandLogoUrl}
       otherHotels={hotel.otherHotels}
       maxWidthClassName="max-w-7xl"
       features={[...features]}

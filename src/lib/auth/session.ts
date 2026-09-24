@@ -81,12 +81,17 @@ export async function getCurrentUserHotel() {
   const selectedHotelId = cookieStore.get(SELECTED_HOTEL_COOKIE)?.value;
   const current = (selectedHotelId && memberships.find((m) => m.hotelId === selectedHotelId)) || memberships[0];
 
-  const { data: policies } = await supabase
-    .from("hotel_policies")
-    .select("extra_settings")
-    .eq("hotel_id", current.hotelId)
-    .maybeSingle();
-  const brandColor = (policies?.extra_settings as { brand_color?: string } | null)?.brand_color ?? null;
+  const [{ data: policies }, { data: profile }] = await Promise.all([
+    supabase.from("hotel_policies").select("extra_settings").eq("hotel_id", current.hotelId).maybeSingle(),
+    // P1-2 (handoff de demo): nombre del usuario para el sidebar -- misma
+    // sesión ya resuelta aquí, un solo viaje adicional, sin nueva función
+    // exportada que cada página tendría que llamar por separado.
+    supabase.from("profiles").select("full_name, email").eq("id", user.id).maybeSingle(),
+  ]);
+  const extraSettings = policies?.extra_settings as { brand_color?: string; logo_url?: string } | null;
+  const brandColor = extraSettings?.brand_color ?? null;
+  const brandLogoUrl = extraSettings?.logo_url ?? null;
+  const userDisplayName = profile?.full_name || profile?.email || user.email || "Usuario";
 
   return {
     hotelId: current.hotelId,
@@ -94,6 +99,8 @@ export async function getCurrentUserHotel() {
     roleName: current.roleName,
     status: current.status,
     brandColor,
+    brandLogoUrl,
+    userDisplayName,
     /** Otras membresías activas, para el selector de hotel de AppShell -- vacío si sólo tiene una. */
     otherHotels: memberships.filter((m) => m.hotelId !== current.hotelId).map((m) => ({ hotelId: m.hotelId, hotelName: m.hotelName })),
   };

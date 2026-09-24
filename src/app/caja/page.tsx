@@ -73,10 +73,12 @@ export default async function CajaPage({
       <AppShell
         hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
+        userDisplayName={hotel.userDisplayName}
         roleName={hotel.roleName}
         current="caja"
         resetHref="/caja"
         brandColor={hotel.brandColor}
+        brandLogoUrl={hotel.brandLogoUrl}
         otherHotels={hotel.otherHotels}
         features={[...features]}
       >
@@ -121,10 +123,12 @@ export default async function CajaPage({
     <AppShell
       hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
+      userDisplayName={hotel.userDisplayName}
       roleName={hotel.roleName}
       current="caja"
       resetHref="/caja"
       brandColor={hotel.brandColor}
+      brandLogoUrl={hotel.brandLogoUrl}
       otherHotels={hotel.otherHotels}
       features={[...features]}
       maxWidthClassName="max-w-6xl"
