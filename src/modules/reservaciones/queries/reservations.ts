@@ -11,7 +11,7 @@ export async function listReservations(hotelId: string, filters: ReservationFilt
   let query = supabase
     .from("reservations")
     .select(
-      "id, folio, primary_guest_name, status, channel, created_at, reservation_stays(check_in, check_out, room_type_id, room_types(name))",
+      "id, folio, primary_guest_name, primary_guest_email, primary_guest_phone, status, channel, created_at, reservation_stays(check_in, check_out, room_type_id, room_types(name))",
     )
     .eq("hotel_id", hotelId)
     .order("created_at", { ascending: false })
