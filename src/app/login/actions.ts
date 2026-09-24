@@ -10,7 +10,7 @@ import { createClient } from "@/lib/supabase/server";
  *   - sin hotel pero con membresía en un hotel suspendido/cancelado -> /suspendido
  *   - resto (sin hotel asignado)     -> /reservaciones (la página muestra el aviso)
  */
-async function homeForCurrentUser(): Promise<string> {
+   export async function homeForCurrentUser(): Promise<string> {
   const supabase = await createClient();
 
   // order by created_at: mismo criterio determinista que getCurrentUserHotel()
