@@ -78,11 +78,13 @@ export default async function ConfiguracionPage({
   if (!features.has("module.configuracion")) {
     return (
       <AppShell
+        hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
         roleName={hotel.roleName}
         current="configuracion"
         resetHref="/configuracion"
         brandColor={hotel.brandColor}
+        otherHotels={hotel.otherHotels}
         features={[...features]}
       >
         <Card className="space-y-3">
@@ -150,11 +152,13 @@ export default async function ConfiguracionPage({
 
   return (
     <AppShell
+      hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
       roleName={hotel.roleName}
       current="configuracion"
       resetHref="/configuracion"
       brandColor={hotel.brandColor}
+      otherHotels={hotel.otherHotels}
       features={[...features]}
     >
       <h1 className="text-xl font-bold text-foreground">Configuración</h1>

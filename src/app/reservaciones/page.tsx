@@ -89,11 +89,13 @@ export default async function ReservacionesPage({
   if (!features.has("module.reservaciones")) {
     return (
       <AppShell
+        hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
         roleName={hotel.roleName}
         current="reservaciones"
         resetHref="/reservaciones"
         brandColor={hotel.brandColor}
+        otherHotels={hotel.otherHotels}
         features={[...features]}
       >
         <Card className="space-y-3">
@@ -162,11 +164,13 @@ export default async function ReservacionesPage({
 
   return (
     <AppShell
+      hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
       roleName={hotel.roleName}
       current="reservaciones"
       resetHref="/reservaciones"
       brandColor={hotel.brandColor}
+      otherHotels={hotel.otherHotels}
       features={[...features]}
     >
       <h1 className="text-xl font-bold text-foreground">Reservaciones</h1>

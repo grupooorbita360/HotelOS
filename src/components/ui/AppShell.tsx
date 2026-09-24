@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { signOut } from "@/app/login/actions";
+import { selectHotel } from "@/lib/auth/actions";
 import { brandStyleVars } from "@/lib/color";
 
 /**
@@ -23,6 +24,7 @@ const MODULES = [
  * fixed a la izquierda todo el tiempo.
  */
 export function AppShell({
+  hotelId,
   hotelName,
   roleName,
   current,
@@ -30,8 +32,10 @@ export function AppShell({
   brandColor,
   maxWidthClassName = "max-w-5xl",
   features,
+  otherHotels,
   children,
 }: {
+  hotelId: string;
   hotelName: string;
   roleName: string | null;
   current: (typeof MODULES)[number]["key"];
@@ -41,6 +45,9 @@ export function AppShell({
   /** Features habilitadas para el hotel (hotel_enabled_features). Si no se
    *  pasa, se muestran todos los módulos (comportamiento anterior). */
   features?: string[];
+  /** Otras membresías activas del usuario (getCurrentUserHotel().otherHotels)
+   *  -- si viene vacío/undefined, un usuario de un solo hotel no ve selector. */
+  otherHotels?: { hotelId: string; hotelName: string }[];
   children: ReactNode;
 }) {
   const visibleModules = features
@@ -55,6 +62,33 @@ export function AppShell({
             {hotelName}
           </h1>
           <p className="px-2 text-xs text-white/70">Rol: {roleName ?? "—"}</p>
+
+          {otherHotels && otherHotels.length > 0 && (
+            <form action={selectHotel} className="mt-3 px-2">
+              <input type="hidden" name="returnTo" value={resetHref} />
+              <label className="block text-[11px] uppercase tracking-wide text-white/60">Cambiar de hotel</label>
+              <div className="mt-1 flex gap-1.5">
+                <select
+                  name="hotelId"
+                  defaultValue={hotelId}
+                  className="w-full rounded-md border border-white/20 bg-white/10 px-2 py-1.5 text-xs text-white outline-none focus:border-white/40"
+                >
+                  <option value={hotelId}>{hotelName}</option>
+                  {otherHotels.map((h) => (
+                    <option key={h.hotelId} value={h.hotelId} className="text-foreground">
+                      {h.hotelName}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  className="shrink-0 rounded-md bg-white/15 px-2 py-1.5 text-xs font-medium text-white hover:bg-white/25"
+                >
+                  Ir
+                </button>
+              </div>
+            </form>
+          )}
 
           <nav className="mt-8 space-y-1">
             {visibleModules.map((m) => (

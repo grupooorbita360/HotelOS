@@ -71,11 +71,13 @@ export default async function CajaPage({
   if (!features.has("module.caja")) {
     return (
       <AppShell
+        hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
         roleName={hotel.roleName}
         current="caja"
         resetHref="/caja"
         brandColor={hotel.brandColor}
+        otherHotels={hotel.otherHotels}
         features={[...features]}
       >
         <Card className="space-y-3">
@@ -117,11 +119,13 @@ export default async function CajaPage({
 
   return (
     <AppShell
+      hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
       roleName={hotel.roleName}
       current="caja"
       resetHref="/caja"
       brandColor={hotel.brandColor}
+      otherHotels={hotel.otherHotels}
       features={[...features]}
       maxWidthClassName="max-w-6xl"
     >

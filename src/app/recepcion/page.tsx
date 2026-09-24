@@ -60,11 +60,13 @@ export default async function RecepcionPage({
   if (!features.has("module.recepcion")) {
     return (
       <AppShell
+        hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
         roleName={hotel.roleName}
         current="recepcion"
         resetHref="/recepcion"
         brandColor={hotel.brandColor}
+        otherHotels={hotel.otherHotels}
         features={[...features]}
       >
         <Card className="space-y-3">
@@ -158,11 +160,13 @@ export default async function RecepcionPage({
 
   return (
     <AppShell
+      hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
       roleName={hotel.roleName}
       current="recepcion"
       resetHref="/recepcion"
       brandColor={hotel.brandColor}
+      otherHotels={hotel.otherHotels}
       maxWidthClassName="max-w-6xl"
       features={[...features]}
     >

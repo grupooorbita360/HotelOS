@@ -63,11 +63,13 @@ export default async function RackPage({
   if (!features.has("module.rack")) {
     return (
       <AppShell
+        hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
         roleName={hotel.roleName}
         current="rack"
         resetHref="/rack"
         brandColor={hotel.brandColor}
+        otherHotels={hotel.otherHotels}
         features={[...features]}
       >
         <Card className="space-y-3">
@@ -120,11 +122,13 @@ export default async function RackPage({
 
   return (
     <AppShell
+      hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
       roleName={hotel.roleName}
       current="rack"
       resetHref="/rack"
       brandColor={hotel.brandColor}
+      otherHotels={hotel.otherHotels}
       maxWidthClassName="max-w-7xl"
       features={[...features]}
     >
