@@ -2308,6 +2308,179 @@ página 3 veces seguidas siempre refleja el hotel elegido; cambiar de
 regreso al otro hotel también refleja de inmediato, sin flash del valor
 anterior.
 
+## Handoff de demo P1, Tanda 1 (UI/UX de bajo riesgo)
+
+Nueve hallazgos (P1-1, P1-2, P1-3, P1-5, P1-6, P1-9, P1-10, P1-11, P1-13)
+de una lista de P1 más larga -- P1-4/P1-7/P1-8/P1-12/P1-14 quedan
+explícitamente para una tanda futura por tocar lógica de negocio real, y
+P2 no se tocó en absoluto. Validado en vivo contra Hotel Demo real
+(`reset_demo_hotel()` antes de probar).
+
+### P1-2: nombre de usuario, logo, shell bilingüe
+
+`getCurrentUserHotel()` (`src/lib/auth/session.ts`) ahora también resuelve
+`profiles.full_name` (o el correo si no lo ha llenado) en el mismo viaje ya
+abierto para el hotel actual -- se muestra en el sidebar junto al rol, que
+ahora es una etiqueta con más contraste en vez de texto plano.
+
+Logo del hotel: mismo patrón exacto que `brand_color` -- una URL en
+`hotel_policies.extra_settings.logo_url`, no una columna/tabla nueva ni
+subida de archivo (Supabase Storage no está en uso en el proyecto todavía;
+construir esa integración sólo para un logo sería infraestructura nueva,
+fuera del alcance "bajo riesgo" de esta ronda). `updateBrandLogo()` exige
+que la URL empiece con `http(s)://`; `AppShell` la muestra junto al nombre
+del hotel si existe, sin lugar para un ícono roto si no hay logo.
+
+Selector de idioma ES/EN: **shell-only**, decisión explícita del dueño del
+producto tras evaluar el esfuerzo real -- el proyecto no tenía ninguna
+infraestructura de i18n (cero librerías, cero strings extraídos);
+traducir el contenido de las ~15 pantallas de cada módulo es un esfuerzo
+grande, aparte, para una ronda futura. `src/lib/i18n.ts` tiene el
+diccionario mínimo de `AppShell` (nombres de módulo, "Rol", "Cerrar
+sesión", "Reiniciar", "Cambiar de hotel", "Idioma", "Ir") y `getLocale()`
+lee la cookie `locale`; `selectLocale()` (`src/lib/auth/actions.ts`) la
+fija con el mismo patrón que `selectHotel()`: `revalidatePath("/",
+"layout")` + un parámetro que cambia en el redirect
+(`?localeChangedAt=<timestamp>`) para que el Client Router Cache no sirva
+el idioma anterior (misma lección ya documentada arriba para el selector
+de hotel). `AppShell` pasó a ser un Server Component `async` para leer la
+cookie directamente, en vez de que cada una de las 5 páginas de módulo
+tuviera que resolverla y pasarla como prop.
+
+### P1-1: KPIs accionables y sticky (Recepción y Reservaciones)
+
+La barra de KPIs queda `sticky top-0` (con su propio fondo, para que la
+lista no se transparente al pasar por debajo) en ambas pantallas. En
+Recepción, cada KPI navega a la lista de Estancias filtrada por lo mismo
+que cuenta (`?filter=expected|in_house|pending`) -- `KpiCard` ganó un
+`href` opcional (se vuelve `<Link>` en vez de `<div>`, mismo componente
+para ambos casos). En Reservaciones, los 3 KPIs (Reservas/Leads/Holds
+activos) ya son cada uno una sección propia de la página con un solo tipo
+de contenido -- "su lista filtrada" es directamente esa sección, así que
+navegan por ancla (`#reservas`/`#leads`/`#holds-activos`; `Card` ganó un
+`id` opcional) en vez de inventar un filtro que no aportaría nada nuevo.
+
+No se movió la barra al lado derecho -- pedido explícito de no decidir
+eso por cuenta propia, es una decisión de diseño pendiente del dueño del
+producto. Sugerencia para cuando se revise: mover los KPIs a una columna
+lateral dejaría más ancho para la lista/tabla principal en pantallas
+anchas, pero cambia el layout de las 5 páginas de módulo, no sólo estas
+dos -- vale la pena decidirlo una sola vez para todo `AppShell`, no
+página por página.
+
+### P1-3: prioridad y check-out oculto por defecto (Recepción)
+
+Dentro de la lista de Estancias, las que tienen una acción pendiente
+(`next_action !== 'ninguna'` y no `checked_out`/`no_show`/`walked`) van
+primero -- un `sort()` de JavaScript, estable desde ES2019, así que dentro
+de cada grupo (pendiente / no pendiente) se conserva el orden anterior
+(`created_at desc`) sin necesitar un criterio de desempate adicional. Las
+que ya hicieron check-out se ocultan por defecto -- nunca para siempre:
+un link "Mostrar N con check-out ya hecho" las revela
+(`?showCheckedOut=1`), con su contraparte para volver a ocultarlas.
+
+### P1-5: "Sin acción pendiente" ya no es ambiguo
+
+`next_action = 'ninguna'` (`recompute_stay_next_action()`, 0026) cubre dos
+situaciones reales y muy distintas: un huésped `in_house` con la cuenta al
+corriente (no hay nada que hacer hasta su check-out) y una estancia ya
+**cerrada** (`checked_out`/`no_show`/`walked`, el ciclo completo terminó).
+No se renombró el estado -- el badge de arriba de la estancia ya distingue
+el status real -- se agregó una línea de ayuda en el detalle que aclara
+cuál de las dos situaciones aplica según `detail.stay.status`.
+
+### P1-6: sección de activos ausente, no vacía con un aviso
+
+Si `hotel_policies.checkin_assets` está vacío, la tarjeta "Activos
+entregados" completa desaparece de la vista de una estancia -- nunca el
+mensaje "Este hotel no tiene activos configurados en su política de
+check-in" que mostraba antes. Confirmado contra Hotel Demo real:
+`checkin_assets = []`, la sección no aparece en absoluto.
+
+### P1-9: el buscador de huésped ignoraba a quien nunca tuvo un lead
+
+`GuestSearchField` (Reservaciones) sugería sólo contra `leads` -- un
+huésped cuya única fila en el sistema es una `reservations` directa (una
+cancelada, por ejemplo, como el caso real "Perla Treviño" que el dueño
+encontró en la demo) nunca tuvo un `lead` propio y por eso nunca aparecía
+en las sugerencias, sin importar cuántas veces se buscara su nombre. El
+directorio de sugerencias ahora combina `leads` con `reservations` (ya
+cargada en la misma página para el listado de abajo -- sólo se le agregó
+`primary_guest_email`/`primary_guest_phone` al `select()` que ya existía,
+sin consulta nueva), incluyendo a propósito `cancelled`/`no_show`/
+`completed`, deduplicado por correo (o teléfono, o nombre si no hay
+ninguno de los dos) para no repetir a la misma persona si ya tiene lead Y
+reserva. Validado en vivo: buscar "Trevi" contra Hotel Demo recién
+reiniciado sugiere "Nadia Treviño" -- la reserva cancelada del seed
+(`0050`, nunca inserta `leads`) que antes de este fix era invisible para
+el buscador.
+
+### P1-10: historial de reservas colapsado
+
+De entrada sólo se ve "Reservas próximas" (`status = 'confirmed'`, lo que
+importa día a día); el historial completo (pasadas/canceladas/no-show)
+queda en un `<details>` al pie con totales por categoría en el `<summary>`
+-- mismo patrón `<details>` que esta página ya usa para "Descuento o
+cortesía" (P0-7), sin JS de cliente. Validado en vivo: "Reservas próximas
+(8)" visible de entrada contra 46 reservas totales; el resumen colapsado
+muestra "(46) — Pasadas: 35 · Canceladas: 2 · No-show: 1", números reales
+del seed.
+
+### P1-11: editar ya no salta al final de la lista
+
+Editar un tipo de habitación o una habitación física (Configuración)
+navegaba a `?editRoomTypeId=`/`?editRoomId=` y el formulario de edición
+aparecía reutilizando la posición del formulario "crear nuevo", siempre al
+final de cada columna -- el usuario perdía el scroll de donde estaba en
+una lista larga. `src/components/ui/Modal.tsx` (`<dialog>` nativo, nuevo)
+resuelve esto: el estado real sigue viviendo en la URL (mismo patrón ya
+establecido, sin reinventar nada), el componente sólo sincroniza
+open/close de un `<dialog>` con esa prop vía `showModal()`/`close()`.
+Cerrar (Escape, click en el fondo, botón ✕) navega de vuelta a la URL sin
+el parámetro de edición.
+
+Dos bugs reales encontrados probando esto en vivo:
+- El `<Link>` de "Editar" seguía subiendo el scroll a la parte superior al
+  cambiar el query param -- comportamiento default de `next/link`, y
+  justo lo que este punto pidió evitar. Corregido con `scroll={false}` en
+  esos `Link` (y los de "Cancelar" dentro del popup) y en el
+  `router.push()` que dispara el cierre del `<dialog>`.
+- El `<dialog>` aparecía pegado a la esquina superior izquierda en vez de
+  centrado: el reset de Tailwind (`preflight`) pone `margin: 0` en todos
+  los elementos, incluido `<dialog>`, eliminando el `margin: auto` que el
+  navegador usa por default para auto-centrarlo. Corregido con centrado
+  explícito (`fixed` + `top-1/2 left-1/2` + `-translate-x-1/2
+  -translate-y-1/2`) en vez de depender del comportamiento nativo.
+
+Validado en vivo con Playwright: el popup abre con los datos correctos
+precargados; guardar refleja el cambio de inmediato en la lista de atrás;
+la posición de scroll (probado en 300px) se mantiene idéntica antes,
+durante y después de cerrar el popup, en las tres formas de cerrarlo.
+
+### P1-13: "Marcar sucia" sí tiene un flujo real -- confirmado, no removido
+
+Se pidió confirmar en el código (no asumir) qué hace este botón antes de
+decidir su destino. Confirmado: `setRoomClean()`
+(`src/modules/configuracion/actions/rooms.ts`) actualiza `rooms.is_clean`
+de verdad, registra `room.marked_clean`/`room.marked_dirty` en el
+timeline, y ese valor alimenta dos consumidores reales -- el gate de
+`reception_settings.checkin_permite_sucia` dentro de `check_in()` (0026) y
+el aviso "(sucia)" que ya muestran `listRoomAssignmentOptions()`/
+`listRoomChangeOptions()` al asignar o cambiar de habitación en Recepción.
+No es un botón sin función: se conservó.
+
+Hallazgo real, no corregido a propósito (fuera de alcance -- tocaría la
+función SQL de checkout, lógica de negocio explícitamente vetada en esta
+ronda): **ninguna función del flujo de check-out marca sucia una
+habitación automáticamente** -- `attempt_check_out()` nunca toca
+`is_clean`. Como Housekeeping no existe todavía, este botón es hoy la
+**única** forma de que `is_clean` pase a `false` en la operación real (el
+demo la usa vía `reset_demo_hotel()`, pero eso es sólo el seed). Se
+documentó esto con una línea de ayuda junto al badge Limpia/Sucia en vez
+de dejar el botón sin contexto -- decidir si el check-out debería marcar
+sucia automáticamente queda para cuando se revise el flujo de checkout a
+propósito (P1/P2 futuro con lógica de negocio, no esta ronda).
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
