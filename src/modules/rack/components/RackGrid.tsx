@@ -238,12 +238,26 @@ export function RackGrid({ hotelId, dateRange, rooms, todayIso }: { hotelId: str
               <Link href={`/recepcion?stayId=${openCell.cell.stayId}`} className="text-brand underline">
                 Expediente
               </Link>
-              <Link href={`/recepcion?stayId=${openCell.cell.stayId}`} className="text-brand underline">
-                Check-In
-              </Link>
-              <Link href={`/recepcion?stayId=${openCell.cell.stayId}`} className="text-brand underline">
-                Cobrar
-              </Link>
+              {/* P0-5 (handoff de demo): sólo la acción válida para el estado real de
+                  la estancia -- nunca "Check-In" si ya lo tiene. */}
+              {(openCell.cell.stayStatus === "expected" || openCell.cell.stayStatus === "arrived") && (
+                <Link href={`/recepcion?stayId=${openCell.cell.stayId}`} className="text-brand underline">
+                  Check-In
+                </Link>
+              )}
+              {(openCell.cell.stayStatus === "checked_in" || openCell.cell.stayStatus === "in_house") && (
+                <Link href={`/recepcion?stayId=${openCell.cell.stayId}&roomChangeStep=1`} className="text-brand underline">
+                  Cambio de habitación
+                </Link>
+              )}
+              {openCell.cell.stayStatus !== "expected" &&
+                openCell.cell.stayStatus !== "checked_out" &&
+                openCell.cell.stayStatus !== "no_show" &&
+                openCell.cell.stayStatus !== "walked" && (
+                  <Link href={`/recepcion?stayId=${openCell.cell.stayId}`} className="text-brand underline">
+                    Cobrar
+                  </Link>
+                )}
             </div>
             <button type="button" className="pt-2 text-xs text-muted underline" onClick={() => setOpenCell(null)}>
               Cerrar

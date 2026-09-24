@@ -3,12 +3,15 @@ import type { ReactNode } from "react";
 export function Card({
   children,
   className = "",
+  id,
 }: {
   children: ReactNode;
   className?: string;
+  /** P1-1 (handoff de demo): permite anclar un KPI a esta sección (`href="#id"`). */
+  id?: string;
 }) {
   return (
-    <div className={`rounded-2xl bg-surface p-6 shadow-sm ${className}`}>{children}</div>
+    <div id={id} className={`rounded-2xl bg-surface p-6 shadow-sm ${className}`}>{children}</div>
   );
 }
 

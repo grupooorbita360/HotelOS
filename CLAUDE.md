@@ -158,7 +158,7 @@ DATOS → ESTADO OPERATIVO (derivado) → REGLAS → PRIORIDAD
   datos), nunca con contadores mantenidos a mano en otra tabla.
 
 `timeline_events` existe desde esta primera versión precisamente para que
-ningún módulo futuro la trate como "algo que se agrega después".
+ingún módulo futuro la trate como "algo que se agrega después".
 
 ## Esquema de base de datos (resumen)
 
@@ -204,8 +204,44 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0035_no_show_hotel_timezone.sql` | Fix: `mark_no_show()` usaba `current_date` (timezone de la sesión) en vez de `hotels.timezone` (ver sección de Fecha operativa) |
 | `0036_priority_engine.sql` | `hotel_rules`, `hotel_priorities`, permiso `priorities.manage`, funciones `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` y la regla `ARRIVAL_NOT_REGISTERED` (ver sección de Motor de reglas y Prioridades) |
 | `0037_priority_engine_hardening.sql` | Endurecimiento del Motor V1: `upsert_hotel_priority()` ya no acepta severity/category/priority_score/source_module del caller; retira la política de `UPDATE` de `hotel_priorities`; agrega 5 funciones `SECURITY DEFINER` para las transiciones humanas (ver "Ajuste 02.1" en Motor de reglas y Prioridades) |
-| `0038_priority_engine_service_role_only.sql` | Restricción de `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` a `service_role` (el motor corre por cron/triggers, no desde el cliente) |
-| `0039_platform_licenses.sql` | Licencias y features de plataforma: `hotel_licenses`, `plan_features`, `hotel_feature_overrides`, funciones `has_feature()`/`hotel_enabled_features()`/`hotel_limit_usage()`/`user_has_suspended_membership()` y suspensión por desactivación de membresías (ver sección de Plataforma) |
+| `0038_priority_engine_service_role_only.sql` | Cierre del Ajuste 02.1: `upsert_hotel_priority()`/`auto_resolve_stale_priorities()` sólo ejecutables por `service_role` (`auth.role() = 'service_role'`, reemplaza el chequeo de pertenencia al hotel); `engine.ts` usa `createAdminClient()` sólo en esas dos llamadas |
+| `0039_platform_licenses.sql` | Fase 0/Plataforma: `hotel_licenses`, `plan_features`, `hotel_feature_overrides`, funciones `has_feature()`/`hotel_enabled_features()`/`hotel_limit_usage()`/`user_has_suspended_membership()` y suspensión por desactivación de membresías (ver sección de Plataforma) |
+| `0040_hotel_functions_membership_guard.sql` | Fase 0/Plataforma: `assert_hotel_member()` + guard de pertenencia en las tres funciones de 0039. |
+| `0041_habitaciones_domain.sql` | Módulo Habitaciones: capacidad explícita aditiva en `room_types`, desactivación con motivo obligatorio en `rooms`, catálogo de amenidades + herencia con excepción (amenidades y activos), `snapshot_comercial_habitacion`, funciones `deactivate_room()`/`reactivate_room()`/`update_room_type_capacity()` (ImpactAnalysis) y `congelar_configuracion_comercial()` (ver sección Habitaciones). No depende de 0039/0040 (no toca `room_types`/`rooms`, sin colisión de nombres de tabla/función) |
+| `0042_snapshot_created_by_fix.sql` | Fix: `congelar_configuracion_comercial()` no fijaba `created_by` en el `INSERT` de `snapshot_comercial_habitacion` (quedaba siempre `NULL`) |
+| `0043_reception_readonly_functions_guard.sql` | Fix de seguridad: `can_deliver_room()`/`check_out_readiness()` (0026) eran `SECURITY DEFINER` sin validar `has_permission()` ni pertenencia al hotel -- ejecutables sin sesión y contra estancias de cualquier hotel (ver sección de Recepción) |
+| `0044_created_by_audit_fixes.sql` | Fix de auditoría: `attempt_inventory_hold()`/`confirm_reservation_from_hold()` no fijaban `inventory_blocks.created_by`; política de `quote_options` no exigía `created_by = auth.uid()` en el `WITH CHECK` (ver sección de Reservaciones) |
+| `0045_revoke_public_execute_internal_functions.sql` | Fix de seguridad: revoca `EXECUTE` de `PUBLIC`/`anon` en `expire_stale_holds()`, `recompute_stay_next_action()`, los 7 triggers `handle_*`, `set_audit_fields()`, `set_updated_at_only()`, `sync_stay_account_balance()` y `assert_hotel_member()` -- ninguna función interna debería tener grant a `anon` por el default de Postgres (ver sección de Reservaciones) |
+| `0046_caja_module.sql` | Módulo Caja: `payment_methods`, `payment_movements`, `cash_settings`, `cash_shifts`, `cash_movements`; extiende `payments`/`stay_transactions` (aditivo); funciones `register_payment_with_movements()`/`register_refund()`/`validate_payment()`/`register_stay_adjustment()`/`open_cash_shift()`/`close_cash_shift()`/`register_cash_expense()`; `hotels.moneda_base` (ver sección de Caja) |
+| `0047_pricing_source_of_truth_tier1.sql` | Fuente única de precio (Tier 1, auditoría externa): `confirm_reservation_from_hold()` pierde `p_rate_total` -- `rate_total` se deriva siempre de `quote_options.total` vía `inventory_holds.quote_option_id`, nunca de un parámetro que el caller pudiera mandar (ver sección "Fuente única de precio") |
+| `0048_quote_options_no_client_insert.sql` | Fuente única de precio (Tier 2): retira la política de `INSERT`/`UPDATE` de cliente en `quote_options`; único camino de escritura es `create_quote_option()` (`SECURITY DEFINER`), que calcula `subtotal`/`taxes`/`total` server-side -- ningún parámetro de precio ya hecho (ver sección "Fuente única de precio") |
+| _(0049 no existe -- hueco intencional, ver nota debajo de esta tabla)_ | |
+| `0050_demo_hotel_seed_reset.sql` | `reset_demo_hotel()`: borra y re-siembra el hotel `hotel-demo` con ~7 semanas de historial anclado a `current_date` (ocupación, ADR, ingresos, no-show, cancelaciones, estancias in-house, solicitudes/incidencias/activos, timeline real). Sólo `platform_admin`. Botón manual en `/admin` → tab "Demo" (`resetDemoHotel()`/`submitResetDemoHotel()`). Traída desde la rama `feature/demo-reset` -- ya estaba aplicada en producción antes de fusionarse a esta rama (ver nota debajo) |
+| `0051_authorized_room_change.sql` | `change_room_with_authorization()` -- upgrade/downgrade de habitación después del check-in, con cobro/cortesía/compensación (P0-3, ver "Handoff de demo P0") |
+| `0052_quote_discount_authorization.sql` | `create_quote_option()` gana `p_is_courtesy`/`p_discount_reason` -- exige `reservations.discount` + motivo para cotizar fuera de la tarifa de lista (P0-7, ver "Handoff de demo P0") |
+| `0053_fix_reset_demo_hotel_leads_fk.sql` | Fix real: `reset_demo_hotel()` (0050) borraba `reservations` antes de desvincular `leads.reservation_id` -- fallaba con violación de FK en cuanto el hotel demo real acumulaba algún lead convertido por uso genuino de la app (ver "Handoff de demo P0") |
+| `0054_fix_reset_demo_hotel_holds_fk.sql` | Mismo problema que 0053, columna distinta: `inventory_holds.converted_reservation_id` (que `confirm_reservation_from_hold()`, 0016, fija en TODO Hold confirmado) tampoco se desvinculaba antes del wipe -- más grave que 0053 porque no es un caso raro, es el camino normal de confirmar una reserva (ver "Handoff de demo P0") |
+
+**Nota sobre el hueco en 0049 y la reconciliación de `feature/demo-reset`
+(commit `2ab7580`):** `feature/demo-reset` es una rama remota que se
+bifurcó de un commit anterior a que esta rama agregara `0041`-`0048` --
+nunca vio ese trabajo, y esta rama nunca había visto la suya. Su autor
+escribió `0050_demo_hotel_seed_reset.sql` sabiendo (por haber consultado
+Supabase real, no el repo) que `0041`/`0042` ya estaban aplicadas en
+producción aunque no las viera en su propio árbol de archivos, y dejó
+`0049` como hueco deliberado a propósito ("deja hueco a 0040... y a
+0041/0042 que existen en producción... aunque aún no estén commiteadas
+en el repo", comentario original del archivo). Se confirmó (auditoría
+externa + verificación en vivo contra Supabase) que `reset_demo_hotel()`
+ya corría en producción desde antes de esta fusión -- fusionar esta rama
+NO aplicó nada nuevo a la base de datos, sólo la deja versionada aquí.
+Único conflicto real al fusionar: dos tabs nuevas e independientes en
+`src/app/admin/page.tsx` (`Auditoría` de esta rama, `Demo` de
+`feature/demo-reset`) insertadas en el mismo punto del archivo --
+resuelto conservando ambas, sin pérdida de ninguna. `0049` queda vacío a
+propósito, documentado aquí para que ninguna sesión futura intente
+reusar ese número: el primer número real y libre para migraciones nuevas
+es **`0051`**.
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -330,8 +366,14 @@ Se agregó:
   `contingency`. Los 4 originales (`hold`, `reservation`, `maintenance`,
   `overbooking`) siguen intactos.
 - `reason` (texto, nullable) y `created_by` (uuid, nullable, FK a
-  `auth.users`) — sólo para bloqueos manuales futuros; `NULL` para
-  `hold`/`reservation`, que ya se auditan vía `hold_id`/`reservation_stay_id`.
+  `auth.users`) — pensados originalmente sólo para bloqueos manuales
+  futuros, asumiendo que `hold`/`reservation` ya quedaban auditados vía
+  `hold_id`/`reservation_stay_id`. **Corrección (0044, ver más abajo):**
+  ese supuesto resultó equivocado — `hold_id`/`reservation_stay_id`
+  identifican la entidad de negocio, no quién ejecutó la acción; sin
+  `created_by`, no había forma de saber qué usuario creó un Hold o
+  confirmó una reserva. Por eso `created_by` sí se fija ahora también para
+  `hold`/`reservation`, no sólo para bloqueos manuales.
 
 **Decisión de nombres:** el pedido original pidió `motivo`/`usuario_id` y
 "MANTENIMIENTO" como valor nuevo de `block_type`. Se ajustó a
@@ -366,6 +408,45 @@ directo. Los dos `check` de 0015 eran anónimos (declarados inline) — no se
 puede ensanchar un `check` in place, así que la migración los localiza por
 catálogo (`pg_constraint`) y los reemplaza, en vez de asumir un nombre
 autogenerado que podría no coincidir entre el entorno local y Supabase.
+
+### Bug real de auditoría: `inventory_blocks.created_by` y `quote_options.created_by` en NULL (0044)
+
+Auditoría externa encontró dos huecos reales, del mismo tipo que el ya
+corregido en `stay_transactions` (0028) y `snapshot_comercial_habitacion`
+(0042): una columna `created_by` que existe en el esquema pero nunca se
+llenaba.
+
+- **`inventory_blocks.created_by`**: `attempt_inventory_hold()` insertaba
+  filas `block_type = 'hold'` sin listar `created_by` en absoluto (ver
+  corrección de la nota de 0033 arriba); `confirm_reservation_from_hold()`
+  las re-etiquetaba a `'reservation'` sin tocarlo tampoco. Corregido
+  fijando `created_by = auth.uid()` en el `INSERT` de la primera, y
+  `created_by = coalesce(created_by, auth.uid())` en el `UPDATE` de la
+  segunda — `coalesce` porque, una vez corregido el `INSERT`, el valor ya
+  viene bien desde que se creó el Hold, y `created_by` significa "quién
+  creó la fila", no "quién la tocó por última vez" (esta tabla no tiene
+  `updated_by` para eso); el `coalesce` sólo actúa de respaldo si una fila
+  llegara con `NULL` de todos modos.
+- **`quote_options.created_by`**: a diferencia de `inventory_blocks`, esta
+  tabla sí acepta `INSERT` directo del cliente (0012) — mismo patrón que
+  `timeline_events` (regla 11: tabla sin `updated_at`/`updated_by`, INSERT
+  directo, RLS como garantía real). `createQuote()` (TypeScript) nunca
+  mandaba `created_by`, y la política RLS de escritura no lo exigía, así
+  que quedaba `NULL` sin que nada lo impidiera. Corregido en dos partes:
+  la política de `quote_options` ahora exige `created_by = auth.uid()` en
+  el `WITH CHECK` (igual que `timeline_events_insert_member_as_self`), y
+  `createQuote()` (`src/modules/reservaciones/actions/quote.ts`) ahora
+  manda `created_by: user?.id` obtenido de `supabase.auth.getUser()`. Los
+  dos cambios son necesarios juntos: sin el `WITH CHECK`, un caller que se
+  saltara el Server Action podría insertar con un `created_by` ajeno; sin
+  el cambio en `createQuote()`, el flujo normal de la app habría empezado
+  a fallar contra el `WITH CHECK` nuevo (el INSERT ya no habría cumplido
+  la condición).
+
+Migración: `0044_created_by_audit_fixes.sql`. Validado localmente y
+contra Supabase real: crear un Hold y confirmar una reserva real deja
+`inventory_blocks.created_by` con el usuario real (no `NULL`); crear una
+cotización real deja `quote_options.created_by` con el usuario real.
 
 ### Actualización de UI (feedback de uso real, misma sesión)
 
@@ -550,7 +631,55 @@ garantice como en `timeline_events`). Corregido en
 `0028_fix_stay_transactions_created_by.sql`. Lección: cualquier tabla
 append-only sin `updated_at`/`updated_by` que se escriba solo desde una
 función `SECURITY DEFINER` necesita que **esa función** fije `created_by`
-explícitamente — no hay trigger genérico ni RLS que lo haga por ti.
+explicitamente — no hay trigger genérico ni RLS que lo haga por ti.
+
+### Falla de seguridad real: `can_deliver_room()`/`check_out_readiness()` sin guard (0043)
+
+Auditoría externa detectó que estas dos funciones (0026), aunque
+`SECURITY DEFINER`, recibían un `stay_id` libre y no validaban nada: ni
+`has_permission()`, ni siquiera que la fila existiera. Al correr como su
+dueño, `SECURITY DEFINER` **ignora RLS por completo** -- exactamente la
+razón por la que cualquier función así que toque datos multi-tenant debe
+hacer su propia validación, como ya hacían `deliver_room()`/
+`attempt_check_out()`/`deactivate_room()` en el mismo archivo/proyecto.
+Sin ese guard, ambas eran ejecutables **sin sesión** (`anon`) y devolvían
+saldo pendiente, activos sin devolver e incidencias abiertas de
+**cualquier hotel**, con sólo conocer/adivinar el UUID de una estancia --
+exactamente el tipo de fuga entre tenants que RLS existe para impedir, y
+que ninguna política de RLS puede tapar una vez que la función corre como
+su dueño.
+
+Corregido en `0043_reception_readonly_functions_guard.sql` con el mismo
+patrón que `deactivate_room()`: `select * into v_stay from public.stays
+where id = p_stay_id; if not found then raise 'STAY_NOT_FOUND'; end if;`
+seguido de `has_permission(v_stay.hotel_id, 'checkin.perform' |
+'checkout.perform')` -- el permiso elegido por consistencia con la acción
+que cada función precede (`deliver_room()` exige `checkin.perform`,
+`attempt_check_out()` exige `checkout.perform`). `hotel_id` sale siempre
+de la fila real, nunca de un parámetro separado que el caller pudiera
+desalinear. No se tocó nada más del cuerpo de ninguna de las dos
+funciones.
+
+**Validado contra Supabase real** (no sólo local) con las tres pruebas
+que exige cualquier cambio de guard multi-tenant en este proyecto: (A)
+llamada sin sesión (`anon`, sin `Authorization`) con un `stay_id` real ->
+`401`, `PERMISSION_DENIED`; (B) usuario con sesión y permiso sobre una
+estancia de su propio hotel -> respuesta normal, sin regresión; (C)
+usuario con sesión y con ese mismo permiso, pero en **otro** hotel,
+contra una estancia ajena -> `403`, `PERMISSION_DENIED` -- prueba que el
+guard valida el hotel de la fila, no sólo si el caller tiene el permiso
+en algún hotel. El usuario de la prueba (C) fue una cuenta desechable
+creada y borrada sólo para la prueba (nunca se tocaron credenciales de
+una cuenta real).
+
+Hallazgo aparte, no corregido a propósito (fuera del alcance de este
+fix -- "no toques nada más de estas dos funciones salvo el guard"):
+`can_deliver_room()` ya tenía, desde el 0026 original, un bug de lógica
+independiente -- cuando hay saldo pendiente hace `return query select
+false, reason` pero no corta el flujo, así que después ejecuta también el
+`return query select true, null` final, devolviendo 2 filas en vez de 1.
+Documentado aquí para que una sesión futura lo corrija a propósito, no
+por accidente al tocar esta función de nuevo.
 
 ### Alcance de esta sesión (fuera de alcance a propósito)
 
@@ -651,7 +780,7 @@ esquema, y `reception_settings` seguiría siendo, por diseño, propiedad de
 Recepción (Módulo 03 ya documentó por qué existe separada).
 
 Decisión: **unificación sólo en la UI**, nunca en el esquema. La pantalla
-"Políticas del hotel" de Configuración es dos `Card` una junto a otra, cada
+"Políticas del hotel" de Configuración es dos `Card` una junto a la otra, cada
 una escribiendo a su tabla de siempre. Configuración define su propia
 lectura/escritura mínima contra ambas tablas
 (`modules/configuracion/queries|actions/policies.ts`) en vez de importar
@@ -828,7 +957,14 @@ se detecta probando clics repetidos contra la app corriendo — ni `psql`
 ni una sola verificación con Playwright (sin repetir el toggle) lo
 revelan.
 
-## Rack: decisiones de esquema (Módulo 05)
+## Rack: decisiones de esquema
+
+_(Nota: esta sección decía "Módulo 05", pero esa numeración chocaba con
+Habitaciones, que el dueño del producto confirmó explícitamente como
+Módulo 05 al pedir Caja/Módulo 06 -- ver esa sección. No se reafirma un
+número para Rack aquí porque no está confirmado contra la numeración real
+del proyecto; se quitó en vez de arriesgar otro choque. Pendiente:
+confirmar el número real de Rack con el dueño del producto.)_
 
 Pedido explícito y no negociable de esta sesión: el Rack es una capa de
 **vista**, no de dominio. Sin tablas propias (ninguna `rack_*`) y sin
@@ -869,7 +1005,7 @@ explícita. En vez de eso, se listan en su propia sección ("Reservas
 confirmadas sin habitación asignada", con su propio KPI) — coincide con lo
 pedido explícitamente en el alcance del MVP, no es un rodeo.
 
-Esto deja la prioridad "`RESERVED` por habitación" del enunciado original
+Esto deja la prioridad `"RESERVED"` por habitación" del enunciado original
 implementada pero inerte en la práctica hoy: sólo se activaría si
 `reservation_stays.room_id` llegara a escribirse en el futuro (una
 pre-asignación comercial explícita, distinta de la operativa de Recepción).
@@ -966,6 +1102,359 @@ anterior, vale la pena confirmarlo contra la API real antes de asumir que ya
 existe. Es la misma lección de la regla 9, aplicada aquí a "columna
 faltante" en vez de "función mal marcada".
 
+## Habitaciones: decisiones de esquema (Módulo 05)
+
+Completa el dominio que Rack, Reservaciones y Recepción ya consumían
+parcialmente vía `room_types`/`rooms` (creados en 0010, extendidos en
+0021/0029). Antes de escribir código se auditó el esquema real (no lo que
+el pedido asumía) — ver `0041_habitaciones_domain.sql`.
+
+### Dos referencias del pedido que no existen en el código real
+
+Verificadas por `grep` contra todo el repo antes de escribir la migración,
+no asumidas:
+
+- **No hay un catálogo normalizado de activos con id propio** ("CAT_
+  ACTIVOS_ENTREGA"). Lo que existe es `hotel_policies.checkin_assets`
+  (jsonb, catálogo de nombres) y `delivered_assets.asset_name` (texto
+  libre contra ese catálogo, sin FK — 0025). `tipo_habitacion_activo` y
+  `habitacion_activo_excepcion` (abajo) siguen exactamente ese mismo
+  patrón — `asset_name text`, sin FK a una tabla que no existe — en vez
+  de inventar un catálogo normalizado nuevo que duplicaría
+  `hotel_policies.checkin_assets` (regla 6).
+- **No existe una tabla genérica "HistorialCambio"** en el proyecto. La
+  auditoría de negocio existente es `timeline_events` (patrón
+  transversal) — se usa esa para reclasificación/desactivación, no se
+  creó una tabla nueva.
+
+### Capacidad explícita: aditivo, no rename
+
+El pedido pedía `base_adults`/`max_adults`/`max_children`/`max_pets` "o
+el nombre que ya tenga esa tabla" asumiendo que Reservaciones ya los
+esperaba. Verificado: Reservaciones (`availability.ts`, `confirm.ts`) hoy
+sólo lee `capacity_adults`/`capacity_children`/`accepts_pets` (0010) —
+esos campos explícitos no existían. Se agregaron como columnas **nuevas**
+(backfilleadas desde las existentes: `max_adults ← capacity_adults`,
+`max_children ← capacity_children`, `max_pets ← accepts_pets ? 1 : 0`),
+sin renombrar ni borrar las viejas — mismo criterio aditivo que
+0029/0033/0034, y consistente con que tocar el modelo de capacidad de
+Reservaciones está fuera de alcance de esta sesión. Reconciliarlas
+(que Reservaciones empiece a leer las nuevas) es evolución futura, igual
+que `base_rate` (0029) estuvo "sin conectar" hasta que esta misma sesión
+lo necesitó de verdad para el fix de IVA.
+
+### Herencia con excepción (3 estados): HEREDA / AGREGA / EXCLUYE
+
+Para amenidades y activos a nivel Habitacion individual. Sin fila en
+`habitacion_amenidad_excepcion`/`habitacion_activo_excepcion` = HEREDA
+(toma la base de `tipo_habitacion_amenidad`/`tipo_habitacion_activo`).
+Con fila `tipo_excepcion = 'AGREGA'` = la habitación tiene algo que su
+tipo no tiene. Con fila `'EXCLUYE'` = la habitación NO tiene algo que su
+tipo sí tiene. La resolución (base + excepciones) vive en TypeScript
+(`resolveRoomAmenities()`/`resolveRoomAssets()`,
+`modules/habitaciones/queries/rooms.ts`), nunca en una vista
+materializada — MVP simple, sin infraestructura nueva.
+
+### SnapshotComercialHabitacion: una vez por reserva, dueño = Habitaciones
+
+`congelar_configuracion_comercial(reservation_id)` (SECURITY DEFINER) es
+el único camino de escritura — mismo patrón que `hotel_priorities`/
+`inventory_blocks` (sin política de INSERT/UPDATE de cliente). Toma la
+primera `reservation_stay` de la reserva (el modelo soporta 1:N pero la
+interfaz de esta sesión sigue limitando a una Estancia, decisión ya
+cerrada de Reservaciones) y congela capacidad + sólo las amenidades con
+`es_promesa_comercial = true`, como JSON compacto. `room_id` es nullable
+a propósito: al confirmarse, `reservation_stays.room_id` nunca se ha
+escrito todavía (ver sección Rack) — se congela lo comercial (tipo), lo
+físico es Recepción. Idempotente vía `on conflict (reservation_id) do
+nothing`, para que un reintento del mismo confirm no duplique.
+
+`modules/reservaciones/actions/confirm.ts` llama a este RPC **directo**
+(`supabase.rpc("congelar_configuracion_comercial", ...)`), nunca
+importando `modules/habitaciones/actions/snapshot.ts` — regla 7 (los
+módulos no se importan entre sí), mismo patrón exacto que Rack llamando
+`assign_room()` por RPC en vez de importar
+`modules/recepcion/actions/lifecycle.ts`. El wrapper de Habitaciones
+(`congelarConfiguracionComercial()`) sigue existiendo como su propio
+punto de entrada, para cuando el propio módulo Habitaciones lo necesite.
+
+### ImpactAnalysis simplificado: SAFE / BLOQUEANTE, sin nivel intermedio
+
+Dos funciones `SECURITY DEFINER`, cada una evaluando la señal real que
+ya existe (no una heurística nueva):
+
+- **`deactivate_room(room_id, reason)`** — BLOQUEANTE si existe una fila
+  activa en `room_assignments` (`released_at is null`) para esa
+  habitación: significa que una Estancia real (actual o futura) depende
+  de esa unidad física concreta. No mira `reservation_stays.room_id`
+  porque nada lo escribe hoy (mismo hallazgo que la sección Rack).
+  Motivo obligatorio, siempre rechazado por Postgres si viene vacío —
+  nunca sólo una validación de TypeScript.
+- **`update_room_type_capacity(room_type_id, ...)`** — BLOQUEANTE si
+  existe una `reservation_stay` de una reserva `confirmed` con
+  `check_out` todavía no pasado (fecha operativa del hotel, nunca
+  `current_date` de sesión — mismo patrón que `mark_no_show()`, 0035)
+  cuya ocupación ya vendida (`adults`/`children`/`has_pets`) no cabría en
+  la capacidad nueva.
+
+El nivel intermedio `REQUIERE_AUTORIZACION` queda fuera de alcance a
+propósito (pedido explícito de esta sesión) — no hay excepción en el MVP,
+un `BLOQUEANTE` siempre rechaza el guardado completo.
+
+### Cambio de comportamiento en Configuración: desactivar ya no es un UPDATE directo
+
+`setRoomActive()` (`modules/configuracion/actions/rooms.ts`) dejó de
+hacer `.update({is_active})` directo: ahora llama a
+`deactivate_room()`/`reactivate_room()` por RPC (mismo patrón de llamada
+directa que arriba, sin importar el Server Action de Habitaciones), y
+exige un motivo para desactivar — se agregó un campo "Motivo (obligatorio)"
+junto al botón "Desactivar" en `/configuracion?tab=habitaciones`. Esto no
+duplica la lógica de ImpactAnalysis (vive una sola vez en el RPC); es la
+misma duplicación mínima ya aceptada en este proyecto para no importar
+entre módulos (ej. `hotel_policies`/`reception_settings` en Configuración
+vs. Recepción).
+
+### Fuera de alcance a propósito (esta etapa)
+
+Sistema de Media con URLs firmadas y contexto (COMERCIAL/DAÑO/
+MANTENIMIENTO) — por ahora `photos text[]` simple en `room_types`/
+`rooms`; catálogos cerrados de Zona/Edificio; relaciones CONNECTING/
+ADJOINING/NEARBY entre habitaciones; `catalog_health_score`; alta masiva
+de habitaciones; suministros/inventario; nivel `REQUIERE_AUTORIZACION`
+del ImpactAnalysis; reconciliar `capacity_adults`/`capacity_children`/
+`accepts_pets` (Reservaciones) con `max_adults`/`max_children`/
+`max_pets` (Habitaciones, nuevos). Ningún módulo de negocio nuevo
+(Rack/Recepción/Reservaciones) se tocó salvo el punto de integración
+explícito de `confirm.ts`.
+
+## Caja: decisiones de esquema (Módulo 06)
+
+Control del movimiento REAL de dinero de la operación. Principio de
+propietarios (no renegociable): Reservaciones responde qué se debe cobrar;
+Recepción responde cuándo debe pagar el huésped; **Caja responde qué
+movimiento real de dinero ocurrió y si cuadra**. Caja nunca se mezcla con
+Contabilidad/Finanzas (futuro, fuera de alcance).
+
+### Decisión central: CuentaFolio/MovimientoCuenta YA existen, no se duplican
+
+El spec de Caja pedía `CuentaFolio`/`MovimientoCuenta` como conceptos
+nuevos. Verificado antes de escribir código: **ya son `stay_accounts`/
+`stay_transactions` (0024, Recepción)** — inmutables, saldo mantenido por
+trigger, reverso por contrapartida nunca por edición. Crear una tabla
+paralela habría sido exactamente la regla 6 (nunca dupliques algo que ya
+existe) al nivel de esquema más caro posible para este módulo. En vez de
+eso, `0046_caja_module.sql`:
+
+- Amplía el catálogo cerrado de `stay_transactions.type` (antes sólo
+  `charge`/`payment`/`refund`) agregando `adjustment` — el único tipo
+  genuinamente nuevo que el spec necesitaba (ajustes manuales, ver abajo).
+- Agrega un trigger (`handle_cash_stay_transaction()`) que alimenta
+  `cash_movements` cuando una `stay_transactions` en efectivo ocurre —
+  sin tocar `register_stay_transaction()`/`void_stay_transaction()` (0026,
+  Recepción, sin cambios). Caja "alimenta" la cuenta ya existente
+  exactamente como pedía el principio de propietarios, nunca al revés.
+
+### `payments` (0017, Reservaciones) se extiende, no se reemplaza
+
+`payments` es el ledger de **la Reserva** (anticipos/abonos/pago total
+antes o al llegar el huésped) — distinto de `stay_transactions`, que es el
+ledger de **la Estancia física**. Caja necesitaba que `payments` aceptara
+efectivo y métodos configurables, y estados más ricos que
+`pending/completed/rejected/reversed`. Cambios, todos aditivos sobre una
+tabla en producción con datos reales:
+
+- **`payment_method_id`** (nueva FK nullable a `payment_methods`).
+  `method` (el texto legacy `card`/`transfer`) **se conserva intacto** —
+  `registerPayment()` de Reservaciones (`src/modules/reservaciones/
+  actions/payment.ts`) no se tocó y sigue funcionando exactamente igual,
+  sin saber que Caja existe (regla 7). Los pagos nuevos que salen de
+  `register_payment_with_movements()` (Caja) fijan ambas columnas.
+- **`method` amplía su `CHECK`** de `('card','transfer')` a
+  `('cash','card','transfer','other')` — esto sí fue necesario tocarlo
+  (no sólo "extender junto a"): sin ampliarlo, un pago en efectivo
+  registrado desde Caja habría violado el `CHECK` original al insertar.
+  Superset seguro: los dos valores legacy siguen siendo válidos, y
+  `registerPayment()` (tipo TS `"card" | "transfer"`) nunca manda otra
+  cosa, así que no hay regresión posible.
+- **`status` amplía su catálogo** a `pending | completed | rejected |
+  reversed | voided | pending_validation` — `completed` se **reusa**
+  para "APLICADO" del spec (nunca se agregó un sinónimo, regla 6);
+  `voided`/`pending_validation` son los dos genuinamente nuevos
+  (ANULADO/EN_VALIDACIÓN).
+- Los dos `CHECK` anónimos de `payments` (`method`, `status`) y los dos de
+  `stay_transactions` (`type` solo, y `type`+`amount` cruzado) se
+  localizan por catálogo (`pg_constraint`), nunca por nombre autogenerado
+  asumido — mismo patrón que 0033. Se encontró y corrigió un riesgo real
+  al escribir esto: dos `CHECK` distintos de `stay_transactions`
+  contienen las palabras `charge`/`payment`/`refund` a la vez (el de
+  `type` solo, y el cruzado con `amount`) — un filtro `ilike` que sólo
+  buscaba esas palabras habría emparejado ambos y hecho fallar el `select
+  ... into` con "more than one row returned". Se desambiguó exigiendo (o
+  excluyendo) la palabra `amount` en la definición.
+
+### `payment_movements`: 1 Pago → N MovimientoCaja, sólo `payments`
+
+Decisión explícita y cerrada: `payment_movements` (Pago dividido entre
+métodos, ej. $2,000 tarjeta + $1,000 efectivo = un `payments` + dos
+`payment_movements`) se ató **sólo a `payments`** (nivel Reserva), no a
+`stay_transactions` (nivel Estancia) — un pago durante la estancia sigue
+siendo un solo `stay_transactions.method` simple, como siempre. Sin
+política de INSERT/UPDATE de cliente (mismo patrón que
+`inventory_blocks`/`reservations`): el único camino es
+`register_payment_with_movements()`/`register_refund()`.
+
+### `payment_methods`: catálogo configurable, cortesía nunca es un método
+
+`payment_methods` es por hotel, con los flags del spec
+(`requiere_referencia`, `requiere_validacion_manual`, `genera_comision`,
+etc.). Se siembran 2 métodos por hotel automáticamente al crearse (mismo
+patrón `handle_new_hotel_*` que `reception_settings`/`hotel_policies`):
+`Tarjeta` (`type='card'`) y `Transferencia` (`type='transfer'`,
+`requiere_referencia=true`) — los dos valores que `payments.method` ya
+aceptaba, para que el backfill de pagos históricos tenga a qué mapear.
+**`Efectivo` no se siembra por defecto** — cada hotel lo agrega desde
+Configuración → Métodos de pago si lo necesita (la mayoría sí, pero no es
+universal: no se asumió). Cortesía nunca es un método de pago aquí — es
+un descuento vía `has_permission()`, porque no hubo dinero real (no se
+modeló ninguna fila para ese caso).
+
+### PermisoExcepcion: decisión TEMPORAL, no resuelta a propósito
+
+El spec pide reembolsos/ajustes vía `PermisoExcepcion` (autorización
+configurable). Ese módulo transversal **no existe todavía** y no se
+construyó aquí — pedido explícito: usar `has_permission()` simple
+(`cash.refund`, `cash.adjust`, sembrados a `hotel_admin` y `accounting`,
+**no** a `front_desk`) como el resto del proyecto ya hace en todos
+lados. **Esto queda documentado como decisión temporal, no definitiva**:
+cuando exista `PermisoExcepcion` como módulo propio, `register_refund()`
+y `register_stay_adjustment()` deben conectarse a él en vez de al
+permiso binario actual. No se re-litiga la decisión de no construirlo
+ahora; sí se re-litiga (a propósito) cuál mecanismo de autorización usan
+estas dos funciones, el día que exista.
+
+### TurnoCaja (`cash_shifts`/`cash_movements`): lo único genuinamente nuevo
+
+Un turno abierto por hotel a la vez (índice único parcial
+`where status = 'open'`) — el turno es el periodo/caja física, **no** el
+usuario: varios usuarios pueden cobrar en el mismo turno, cada
+`cash_movements.created_by` conserva quién hizo cada movimiento.
+
+`cash_movements` es la única fuente para calcular `EfectivoEsperado`
+(`fondo_inicial + Σcash_in − Σcash_out`) — nunca se deriva sumando por
+separado `payment_movements`+`stay_transactions` en dos lugares (regla
+6). Se llena sola por tres caminos, nunca INSERT directo del cliente:
+
+1. **Trigger** sobre `stay_transactions` en efectivo (ver arriba) —
+   **best-effort, nunca bloquea a Recepción**: si el hotel no usa turnos
+   (`cash_settings.usa_turnos_caja = false`) o no hay turno abierto, el
+   trigger simplemente no genera el movimiento y `register_stay_
+   transaction()` sigue funcionando igual (validado explícitamente:
+   Recepción no puede depender del estado de Caja para operar, mismo
+   principio ya cerrado en el Módulo 03). Es un hueco operativo real y
+   consciente si el hotel usa turnos pero olvida abrir uno — no se
+   bloquea retroactivamente algo que Recepción necesita poder hacer
+   siempre.
+2. **`register_payment_with_movements()`/`register_refund()`** (Caja,
+   nivel Reserva) — aquí **sí bloquea**: si el método es efectivo y el
+   hotel usa turnos pero no hay uno abierto, rechaza con
+   `NO_OPEN_CASH_SHIFT`. La asimetría con el punto 1 es intencional: este
+   es un camino nuevo que Caja controla por completo, sin una función
+   ajena que dependa de que funcione siempre.
+3. **`register_cash_expense()`** — egreso operativo manual (taxi, caja
+   chica, proveedor menor). Límite explícito de v1: nunca cuentas por
+   pagar ni gasto contable completo, eso es el futuro módulo de
+   Finanzas — `register_cash_expense()` sólo acepta un turno abierto y
+   un monto/concepto, sin flujo de aprobación previo (el propio permiso
+   `payments.register` ya es la autorización).
+
+`close_cash_shift()` calcula `efectivo_esperado`/`diferencia` en el
+momento del cierre (nunca recalculado después) y los guarda —
+`EfectivoContado − EfectivoEsperado`, mostrado en lenguaje simple desde
+la UI (`/caja`), nunca como variable técnica cruda.
+
+### Saldo de la Reserva vs. saldo de la Estancia — dos saldos distintos, a propósito
+
+`getReservationBalance()` (`src/modules/caja/queries/payments.ts`) calcula
+`Σreservation_stays.rate_total − Σpayments.amount` (neto, `payments.amount`
+ya viene con signo: positivo cobros, negativo reembolsos) — es el saldo
+que usa el guard de sobrepago de `register_payment_with_movements()`.
+**Esto es un saldo distinto de `stay_accounts.balance`** (Recepción,
+0024): uno es "cuánto se ha pagado de lo vendido en la Reserva", el otro
+es "cuánto debe la Estancia física ahora mismo" (incluye cargos por
+consumos/activos que Reservaciones nunca ve). No se fusionan — cada uno
+sigue siendo responsabilidad de su módulo, mismo principio que ya cerró
+Recepción con `hotel_policies`/`reception_settings` en Configuración.
+Nunca se muestra un saldo negativo crudo: `formatBalanceLabel()` traduce
+a "Falta por pagar"/"Saldo a favor"/"Cuenta liquidada".
+
+### Sobrepago: nunca se acepta en silencio
+
+`register_payment_with_movements()` calcula el saldo de la Reserva antes
+de insertar; si el monto del pago lo supera y el caller no manda
+`p_confirm_overpayment = true`, rechaza con `OVERPAYMENT_CONFIRMATION_
+REQUIRED` (incluye el saldo pendiente y el monto intentado en el mensaje
+para que la UI pueda mostrar la pregunta explícita del spec: "Corregir
+monto" / "Registrar saldo a favor"). La UI de `/caja` expone esto como un
+checkbox de confirmación explícito, nunca un reintento silencioso.
+
+### Reembolsos: entrada siempre positiva, signo interno preservado
+
+`register_refund()` recibe `p_amount` siempre positivo (nunca se le pide
+al usuario capturar un número negativo) y exige motivo. Internamente
+inserta `payments` con `amount = -p_amount` — el `CHECK` original de
+0017 (`type = 'refund' and amount < 0`) **no se tocó**: seguía siendo
+correcto, sólo la UX de captura cambió. Valida que el reembolso no
+exceda el pago original cuando se vincula uno (`REFUND_EXCEEDS_
+ORIGINAL`), y genera `cash_movements` tipo `cash_out` si el método es
+efectivo, con la misma exigencia de turno abierto que un cobro.
+
+### Ajustes manuales: nunca se edita el saldo directo
+
+`register_stay_adjustment()` es el único camino para insertar una fila
+`stay_transactions` tipo `adjustment` (permiso `cash.adjust`) — motivo
+obligatorio, monto distinto de cero (puede ser positivo o negativo, a
+diferencia de `charge`/`payment`/`refund` que tienen signo fijo por
+tipo). `register_stay_transaction()`/`void_stay_transaction()` (0026)
+nunca emiten este tipo — su propia validación de signo interna sólo
+conoce `charge`/`payment`/`refund`, así que ni siquiera intentarían
+producir uno por error.
+
+### Herencias obligatorias de este proyecto, aplicadas tal cual
+
+Cada función `SECURITY DEFINER` nueva deriva `hotel_id` de la fila
+(`stays`/`payments`/`cash_shifts`), nunca de un parámetro suelto que el
+caller pudiera desalinear (lección 0040/0043) — validado explícitamente
+contra un usuario de otro hotel intentando `register_stay_adjustment()`
+y `register_cash_expense()` sobre filas ajenas: ambos rechazan con
+`PERMISSION_DENIED` porque `has_permission()` evalúa el `hotel_id` real
+de la fila, no uno que el caller pudiera mandar. `created_by` se fija
+explícitamente en cada `INSERT` de las tablas append-only nuevas
+(`payment_movements`, `cash_movements`) — lección 0044/regla 11: ninguna
+tiene `updated_at`/`updated_by` ni acepta INSERT directo del cliente.
+`module.caja` se valida en cada Server Action (`assertFeatureEnabled()`,
+nueva en `src/lib/auth/platform.ts`) antes de mutar, siguiendo el patrón
+que la sección de Plataforma ya documentó para features conmutables.
+
+### Fuera de alcance a propósito (MVP de esta sesión)
+
+Conciliación completa de método de pago (queda para v2 — pero
+`payments`/`payment_movements` ya están diseñadas para no bloquear esa
+evolución: `genera_comision`/`proveedor` en `payment_methods` y
+`validated_at`/`validated_by` en `payment_movements` ya existen sin
+consumidor todavía); corte de caja intermedio sin cerrar turno;
+timbrado real de CFDI (`cash_settings.requiere_facturacion_fiscal`/
+`rfc_hotel`/`regimen_fiscal` sólo guardan los datos, la integración con
+un PAC externo es trabajo futuro); pago que cubre más de una reserva a
+la vez (grupos); reembolso parcial de un pago dividido entre métodos
+(hoy un reembolso es un método a la vez); Radar 360/Mi Hotel Hoy
+consumiendo estos datos. Ningún módulo de negocio existente
+(Reservaciones/Recepción/Rack/Habitaciones) se tocó salvo: el `CHECK` de
+`payments.method`/`status` (necesario, ver arriba), el `CHECK` de
+`stay_transactions.type` (necesario), y un display de un solo renglón en
+`src/app/reservaciones/page.tsx` (el texto de método de pago sólo sabía
+mostrar "tarjeta"/"transferencia", y ahora un pago en efectivo real
+podía llegar por ahí desde que `payments.method` acepta `cash`).
+
 ## Plataforma: licencias y features (Fase 0)
 
 Decisiones de modelo comercial multi-tenant:
@@ -1005,11 +1494,47 @@ Decisiones de modelo comercial multi-tenant:
 - El gating de features en UI es UX, no seguridad: las Server Actions
   siguen verificando permisos con `requirePermission()`. AppShell recibe
   `features?: string[]` para ocultar módulos del nav.
+- **Patrón para enforcement server-side de features (cuando un módulo
+  diferencie planes — el primer caso será Caja):** cada Server Action
+  nueva que pertenezca a una feature conmutable debe verificarla ANTES de
+  ejecutar, llamando a `has_feature(hotelId, 'module.<x>')` en Postgres
+  (vía RPC, igual que `getHotelFeatures()` en `src/lib/auth/platform.ts`)
+  y abortando con error legible tipo `FEATURE_NOT_ENABLED: module.<x> no
+  está incluido en tu plan` si regresa false. El chequeo va en la action,
+  no en el componente (el cliente puede saltarse cualquier gate de UI), y
+  por sesión/hotel justo antes de la mutación, no cacheado al entrar al
+  módulo — un override puede encenderse/apagarse en cualquier momento.
+  Las features activas en TODOS los planes desde el lanzamiento
+  (`module.reservaciones`, `module.recepcion`, `module.rack`,
+  `module.configuracion`, `module.mi_hotel_hoy`) NO llevan este chequeo:
+  es ruido para lo que hoy no puede estar apagado. El patrón aplica a
+  partir de la primera feature que realmente diferencie planes.
 - `/admin` es sólo para `profiles.is_platform_admin` (verificado con
   `is_platform_admin()` en server, no confiar del cliente). Alta de hotel:
-  crea hotel + licencia con defaults del plan + invita al dueño por email
-  (`auth.admin.inviteUserByEmail` — excepción documentada al veto de
-  `admin.ts`) + rol `hotel_admin` global.
+  PRIMERO se resuelve al dueño —si el correo ya tiene cuenta se vincula
+  (búsqueda por `profiles.email`, que plataforma puede leer vía RLS, 0006);
+  si no, se invita por email (`auth.admin.inviteUserByEmail` — excepción
+  documentada al veto de `admin.ts`)— y DESPUÉS se crea hotel + licencia
+  con defaults del plan + rol `hotel_admin` global. Si el invite falla
+  (p. ej. rate limit de correos de Supabase) NO queda hotel huérfano y el
+  error dice cómo reintentar. La tabla de /admin muestra el dueño activo
+  de cada hotel y permite asignarlo/reasignarlo y reenviar la invitación
+  (`assignHotelOwner` / `resendOwnerInvite`, PR #6).
+- **Hotel Demo (`/admin` → tab "Demo", `0050`):** la demo vive como un
+  hotel más (`slug = 'hotel-demo'`) -- mismo código, misma base, aislado
+  sólo por la RLS multi-tenant que ya existe, sin infraestructura
+  paralela. `reset_demo_hotel()` (`SECURITY DEFINER`, sólo
+  `platform_admin`) borra todo el dato operativo de ese hotel y lo
+  re-siembra con ~7 semanas de historial ancladas a `current_date` para
+  que la demo se vea viva (ocupación/ADR/revPAR con historia,
+  llegadas/estancias en curso, incidencias, timeline real). Reset manual
+  a propósito en esta fase (un reset automático destruiría lo que el
+  equipo genera explorando) -- la misma función puede programarse como
+  cron cuando la demo sea pública. Esta migración se escribió en una
+  rama distinta (`feature/demo-reset`) que se bifurcó antes de que este
+  branch agregara `0041`-`0048`; se reconcilió trayendo `0050` tal cual
+  (ya estaba aplicada en producción) -- ver la nota junto a la tabla de
+  migraciones sobre el hueco en `0049`.
 
 ## Fecha operativa del hotel (businessDate)
 
@@ -1281,6 +1806,681 @@ la llamada directa" (no es posible sin esa infraestructura) sino "reducir
 al mínimo necesario lo que esa llamada puede fabricar", exactamente lo
 que hace el punto 1.
 
+### Trade-off consciente: `hotel_priorities.created_by` queda NULL en toda alerta del motor (0038)
+
+Consecuencia directa del cierre de 0038: `upsert_hotel_priority()` sólo
+acepta llamadas de `service_role` (`auth.role() = 'service_role'`), y el
+trigger genérico `set_audit_fields()` que sí tiene `hotel_priorities`
+(0036) fija `created_by = auth.uid()` -- que para una llamada de
+`service_role` (sin JWT de usuario) siempre es `NULL`. Es decir: **toda
+prioridad creada por el motor queda con `created_by = NULL`**, siempre,
+por diseño de 0038, no por un bug.
+
+Auditoría externa lo señaló y el dueño del producto ya decidió: esto se
+**acepta tal cual**, no se corrige. Una alerta generada automáticamente
+por una regla del sistema no tiene un "creador humano" -- forzar un
+`created_by` ahí (ej. usando el `auth.uid()` de quien disparó la
+evaluación desde la UI, que es incidental y no el origen real de la
+alerta) sería falsear la auditoría, no repararla. La auditoría real de
+"por qué existe esta prioridad" ya vive en `rule_id` + `detected_at` +
+`source_event_id` (0036/0037), que sí describen el origen con precisión;
+`created_by` simplemente no es el campo correcto para esa pregunta en
+esta tabla. Las 5 transiciones humanas (`acknowledge_hotel_priority()` y
+el resto, 0037) sí corren con el cliente de sesión del usuario y sí dejan
+`updated_by` correcto -- el hueco es exclusivamente `created_by` en el
+`INSERT` original del motor, y sólo ahí.
+
+## Fuente única de precio (auditoría externa, Tier 1)
+
+Auditoría externa encontró que HotelOS no tenía una fuente única de
+cálculo de precio: cuatro puntos distintos lo resolvían cada uno por su
+cuenta -- `submitSearchAndQuote()` tomaba `nightlyRate` crudo del
+`FormData` del navegador; `searchAvailableOptions()` mostraba
+`room_types.base_rate` como "precio de referencia" sin validarlo;
+`submitConfirmReservation()` tomaba un `rateTotal` **independiente**
+también crudo del `FormData`, sin relación alguna con lo ya cotizado; y
+`listRoomAssignmentOptions()` (Recepción) recalculaba el upgrade con
+`room_types.base_rate` en vez de la tarifa realmente vendida. Un mismo
+hueco con cuatro síntomas, no cuatro bugs distintos -- se propuso el
+diseño completo antes de tocar código (mismo patrón que el fix de
+`service_role`, 0038, y el de IVA, 0034) y se aprobó por partes: Tier 1
+(cierra los cuatro síntomas reportados) primero, Tier 2 (cerrar
+`quote_options` al mismo patrón sin-INSERT-de-cliente que
+`inventory_blocks`/`reservations`) como decisión separada posterior.
+
+### Tier 1: cálculo central + freeze real en confirm
+
+- **`src/lib/pricing.ts` (`calculateStayPrice()`)** -- función pura, sin
+  acceso a DB, mismo espíritu que `calculateTaxBreakdown()` (0034): recibe
+  `baseRateNightly` (ya resuelto por el caller desde `room_types.base_rate`),
+  `nights`, un `nightlyRateOverride` opcional y `ivaPorcentaje`, y devuelve
+  `{ nightlyRateUsed, subtotal, taxes, total, isOverride }`. El override
+  **no se prohíbe** -- sigue siendo la tarifa negociada que el staff ya
+  podía capturar al cotizar (Módulo 04) -- sólo deja de determinar el total
+  por su cuenta: pasa por el mismo cálculo que la tarifa de lista.
+- **`createQuote()`** (`modules/reservaciones/actions/quote.ts`) ya no
+  acepta `subtotal`/`taxes`/`total` del caller: recibe
+  `nightlyRateOverride?`, resuelve `room_types.base_rate` server-side y
+  calcula con `calculateStayPrice()` antes de insertar en `quote_options`.
+  `submitSearchAndQuote()` dejó de hacer aritmética -- sólo reenvía
+  `nightlyRate` (si el staff lo editó) como `nightlyRateOverride`.
+- **`confirm_reservation_from_hold()` (0047) perdió `p_rate_total` de la
+  firma por completo** -- no sólo dejó de usarse, se quitó del parámetro
+  (drop + create, Postgres no permite quitar un parámetro con
+  `create or replace`; mismo criterio ya aplicado en 0037 a
+  `upsert_hotel_priority()`: "se quitan de la firma, no sólo se ignoran").
+  `rate_total` se deriva siempre de
+  `inventory_holds.quote_option_id -> quote_options.total` -- el mismo
+  Hold que se está confirmando, nunca de un valor que el navegador
+  reenviara en el formulario de confirmación. Un Hold sin
+  `quote_option_id` (no generado por la UI actual) sigue cayendo en 0,
+  igual que el default anterior. Se aprovechó el mismo cambio de firma
+  para aplicarle la higiene de 0045/0046 (`revoke ... from public/anon`,
+  sólo `authenticated`), ya que de cualquier forma había que recrear la
+  función.
+  `confirmReservation()`/`submitConfirmReservation()` dejaron de pedir
+  `rateTotal`; el campo oculto `rateTotal` del formulario de confirmación
+  (`src/app/reservaciones/page.tsx`) se eliminó -- ya no hay ningún valor
+  de precio que el cliente pueda reenviar en ese paso.
+- **`listRoomAssignmentOptions()`** (Recepción) gana un parámetro
+  `soldNightlyRate` (la tarifa **realmente vendida**,
+  `reservation_stays.rate_total / noches`) que reemplaza el
+  `room_types.base_rate` del tipo vendido como base de comparación del
+  upgrade -- ambos podían divergir por una tarifa negociada al cotizar, o
+  porque `base_rate` cambió en Configuración después de confirmarse esa
+  reserva en particular. El lado "upgrade" sigue comparando contra el
+  `base_rate` **actual** del tipo candidato -- no hay tarifa histórica que
+  congelar para una habitación que el huésped nunca reservó. Su único call
+  site (`src/app/recepcion/page.tsx`) ya tenía `rate_total` cargado para
+  el estado de cuenta; se reordenó para calcular `soldNightlyRate` antes
+  de pedir las opciones, sin duplicar la lectura.
+
+**Validado localmente antes de mandar la migración** (Postgres 16 local,
+mismo rigor que toda migración de este proyecto): cotizar con y sin
+override reconstruye `subtotal + taxes = total` exacto en ambos casos;
+confirmar una reserva real dentro de una transacción de prueba deja
+`reservation_stays.rate_total` **idéntico** a `quote_options.total` del
+Hold confirmado, sin que ningún parámetro de precio exista ya en la
+llamada; un Hold sin cotización previa sigue cayendo en `rate_total = 0`
+(comportamiento sin cambios); la firma vieja con `p_rate_total` ya no
+resuelve en absoluto (`function ... does not exist`); el gate de
+`has_permission('reservations.create')` sigue rechazando a un rol sin ese
+permiso (código de la función sin tocar, sólo se movió la derivación del
+precio). Pendiente de aplicar contra Supabase real y repetir estas mismas
+pruebas ahí antes de dar el ciclo por cerrado.
+
+### Tier 2: `quote_options` sin INSERT de cliente (0048)
+
+Antes de tocar la política, se confirmó lo pedido: la política de
+escritura anterior (`quote_options_write_reservations_create_or_platform_admin`,
+0012, endurecida en 0044) **ya exigía ambas cosas**, no sólo
+`created_by = auth.uid()` -- el `WITH CHECK` (y el `USING`) pedían
+`created_by = auth.uid() AND (is_platform_admin() OR has_permission(hotel_id, 'reservations.create'))`.
+Es decir: un caller que se saltara el Server Action y pegara directo a
+PostgREST con su propio token ya no podía insertar una cotización para
+otro usuario, ni para un hotel donde no tiene `reservations.create` --
+pero sí podía, dentro de su propio hotel y con ese permiso legítimo,
+insertar un `total` fabricado que nunca pasó por el cálculo real. A
+diferencia del residual ya aceptado en 0037 para `upsert_hotel_priority()`
+(un título/mensaje inventado, puramente informativo), éste sí tenía
+dinero de por medio.
+
+`0048_quote_options_no_client_insert.sql` cierra esto con el mismo patrón
+que `inventory_holds`/`inventory_blocks`/`reservations` (0013/0015/0016):
+se retira por completo la política de escritura de `quote_options` (ya no
+hay `INSERT` ni `UPDATE` de cliente, sólo `SELECT`) y el único camino de
+escritura pasa a ser `create_quote_option()` (`SECURITY DEFINER`).
+
+**Diferencia clave con Tier 1**: Tier 1 sólo dejó de *confiar* en un total
+ya calculado por el cliente (`createQuote()`, en TypeScript, seguía
+haciendo el cálculo). Tier 2 mueve el cálculo mismo **por completo** a
+`create_quote_option()` -- mismo criterio que 0037 aplicó a
+`priority_score` ("tener el mismo cálculo en dos lenguajes sólo servía
+para que el del cliente fuera el que un caller malicioso podía ignorar").
+La función deriva `hotel_id` de la fila de `quotes` (que ya existe cuando
+se la invoca -- `createQuote()` la inserta primero, sin cambios), nunca de
+un parámetro suelto (lección 0040/0043); resuelve `room_types.base_rate`
+y `hotel_policies.iva_porcentaje` ella misma; y sólo acepta
+`p_nightly_rate_override` como entrada de precio -- la misma tarifa
+negociada que el staff ya podía capturar, nunca un total/subtotal/taxes ya
+hechos. Un caller que invoque el RPC directo por REST, aunque tenga
+`reservations.create` legítimo en su propio hotel, **no tiene ningún
+parámetro de precio que fabricar**: sólo puede pedir una tarifa por noche
+distinta, que pasa por el mismo cálculo que la tarifa de lista.
+
+Como consecuencia, `src/lib/pricing.ts` (`calculateStayPrice()`, Tier 1)
+se quedó sin caller -- `createQuote()` ya no calcula nada, sólo reenvía
+`nightlyRateOverride` al RPC y usa `option.total` de lo que el RPC
+devuelve. Se borró, mismo destino que `scoring.ts` en 0037.
+
+**Validado localmente** (mismo Postgres 16 de las pruebas de Tier 1, con
+0047+0048 aplicadas juntas):
+- **A** -- un `INSERT` directo a `quote_options` con un `total` fabricado
+  (`1`, muy por debajo del real), ejecutado como `hotel_admin` de Hotel A
+  con `reservations.create` legítimo *en su propio hotel*, es rechazado
+  categóricamente por RLS (`new row violates row-level security policy for
+  table "quote_options"`) -- no hay ninguna combinación de permiso que lo
+  permita, porque ya no existe política de `INSERT` en absoluto.
+- **B** -- el flujo normal (`create_quote_option()` vía RPC, tal como lo
+  llama `createQuote()`) sigue funcionando exactamente igual: tipo
+  Sencilla de Hotel A (`base_rate = 950`), 2 noches, sin override →
+  `total = 1900.00`, `subtotal = 1637.93`, `taxes = 262.07`.
+- **C** -- mismo tipo/hotel, 2 noches, con `p_nightly_rate_override = 700`
+  → `total = 1400.00`, `subtotal = 1206.90`, `taxes = 193.10` -- **valores
+  idénticos** a los que `calculateStayPrice()` (TypeScript, Tier 1) ya
+  había calculado para el mismo caso antes de borrarse, confirmando que
+  mover el cálculo a SQL no cambió el resultado. La firma de
+  `create_quote_option()` se confirmó de 8 parámetros, ninguno
+  `subtotal`/`taxes`/`total` -- no existe vector para inyectar un precio
+  ya hecho.
+
+**Actualización: `0047`/`0048` ya se aplicaron a Supabase real y las
+pruebas A-D se repitieron ahí con los mismos resultados** -- ver el
+detalle en la sección "Handoff de demo P0" (más abajo, P0-1) para el
+hallazgo real encontrado después: `confirm_reservation_from_hold()` podía
+lanzar `HOLD_EXPIRED` sin que nada lo atrapara, produciendo un 500 crudo
+en vez de un mensaje claro. No es una regresión de Tier 1/2 -- ese hueco
+de manejo de errores ya existía desde antes de esta auditoría de precio;
+Tier 1/2 sólo cambiaron QUÉ se manda al RPC, nunca si sus errores se
+atrapan.
+
+## Handoff de demo P0 (bloqueos de funcionalidad core)
+
+Ronda de corrección sobre una lista de 8 hallazgos (P0-1 a P0-8) reportados
+contra el Hotel Demo real. Se diagnosticó primero (reproduciendo cada uno
+contra Hotel Demo recién reiniciado con `reset_demo_hotel()`, 0050) y sólo
+después se corrigió -- varios comparten la misma causa raíz, documentada
+una sola vez aquí en vez de repetida por punto.
+
+### P0-1: error 500 crudo al confirmar -- causa real, no dato faltante ni regresión de precio
+
+Reproducido en vivo: `submitSearchAndQuote()`/`submitConfirmReservation()`
+(`src/app/reservaciones/actions.ts`) y sus hermanos (`submitCreateHold`,
+`submitReleaseHold`, `submitCancelReservation`,
+`submitRegisterAdditionalPayment`) no atrapaban ninguna excepción de
+negocio -- un Hold vencido (`HOLD_EXPIRED`, 0016) llegando a
+`confirmReservation()` producía un `throw` sin capturar, Next.js lo
+renderizaba como su página de error genérica ("A server error occurred"),
+`digest` incluido. Confirmado con el log real del servidor:
+`⨯ Error: {"code":"P0001",...,"message":"HOLD_EXPIRED"} ... POST
+/reservaciones?holdId=... 500 ... submitConfirmReservation`. No es un dato
+faltante del seed (0050) ni una regresión de Tier 1/2 (ver nota arriba) --
+es un hueco de manejo de errores que ya existía.
+
+Corregido con `src/lib/friendlyError.ts`
+(`friendlyErrorMessage(error, fallback?)`): traduce los códigos que este
+proyecto ya usa (`HOLD_EXPIRED`, `HOLD_NOT_ACTIVE`, `NO_AVAILABILITY`,
+`PERMISSION_DENIED`, `ROOM_TYPE_MISMATCH`, etc.) a un mensaje en español;
+cualquier código no listado cae en un mensaje genérico -- **nunca se
+re-lanza el error crudo**. Todas las Server Actions de
+`reservaciones/actions.ts` ahora atrapan y redirigen con `?error=` (mismo
+patrón que `submitCreateHold()` ya tenía para `NO_AVAILABILITY`, ahora
+generalizado). Bug real encontrado corrigiendo esto: `error instanceof
+Error` no siempre es `true` para un `PostgrestError` de supabase-js que
+cruza la frontera de un Server Action -- `friendlyErrorMessage()` cayó al
+mensaje genérico en la primera prueba en vivo en vez del mensaje
+específico de `HOLD_EXPIRED`. Corregido buscando `.message` en cualquier
+objeto con esa forma, no sólo en instancias reales de `Error`; validado de
+nuevo en vivo con un Hold recién creado y vencido a mano (`expires_at` en
+el pasado) -- esta vez sí mostró "Este Hold ya expiró. Vuelve a cotizar
+para generar uno nuevo.", sin 500.
+
+### P0-2/P0-4: causa compartida real -- `assignRoomFromRack()` nunca llamaba `revalidatePath("/rack")`
+
+No se pudo reproducir "falla al confirmar" para un movimiento de MISMA
+categoría contra Hotel Demo real: arrastrar y soltar, confirmar, y el
+movimiento se aplicó y persistió correctamente (verificado releyendo el
+Rack en una navegación nueva). Pero se encontró la causa raíz real de por
+qué SÍ podía parecer que fallaba: `src/app/rack/actions.ts`
+(`submitAssignUnassigned`, el flujo de formulario plano) ya llamaba
+`revalidatePath("/rack")` después de mover -- pero
+`assignRoomFromRack()` (`src/modules/rack/actions/assignments.ts`, el
+código que **ambos** flujos comparten, incluido el drag & drop) sólo
+llamaba `invalidateRackCache()`, el `Map` en memoria del proceso Node
+documentado explícitamente como "no es un cache distribuido -- en un
+despliegue multi-instancia cada instancia tiene el suyo". En cualquier
+despliegue con más de un proceso sirviendo peticiones, un movimiento podía
+escribirse correctamente en la base y el siguiente `router.refresh()`
+aterrizar en OTRA instancia que nunca se enteró de la invalidación,
+sirviendo su copia cacheada hasta que expirara el TTL de 45s -- exactamente
+lo que un usuario percibiría como "confirmé el movimiento y no pasó nada".
+
+Corregido agregando `revalidatePath("/rack")` dentro de
+`assignRoomFromRack()` mismo (cubre drag & drop y el formulario plano por
+igual, un solo punto) y quitando la llamada ahora redundante en
+`rack/actions.ts`. `invalidateRackCache()` se conserva sin tocar -- sigue
+sirviendo para el caso de una sola instancia (dev local, o cualquier
+despliegue de un solo proceso), donde invalida de inmediato sin esperar el
+TTL.
+
+### P0-3: no era el mismo bug que P0-2 -- era una función que nunca se construyó
+
+Confirmado explícitamente antes de diseñar nada: el "falla" de cambiar a
+categoría DISTINTA es `assign_room()` (0026) rechazando con
+`ROOM_TYPE_MISMATCH` -- comportamiento **intencional** desde el spec
+original ("MVP solo permite asignación equivalente"), capturado limpio por
+el `try/catch` que ya existía en `RackGrid.tsx`, sin crash. No comparte
+causa con P0-2/P0-4: aquí no faltaba invalidar caché, faltaba la función
+de autorización que el spec siempre dejó pendiente.
+
+`change_room_with_authorization()` (`0051_authorized_room_change.sql`) es
+la función nueva: a diferencia de `assign_room()` (Rack, sólo equivalente)
+y `assign_room_for_checkin()` (0032, sólo al momento del check-in), ésta
+permite upgrade/downgrade **después** del check-in. Determina
+upgrade/downgrade comparando `room_types.base_rate` del tipo anterior
+(de la asignación activa si existe, o si no, del tipo vendido en
+`reservation_stays` -- mismo criterio que 0032) contra el tipo nuevo.
+Motivo obligatorio salvo para un cambio equivalente. Autorización:
+`has_permission(hotel_id, 'room.change')` simple -- mismo patrón temporal
+ya usado para Caja (`cash.refund`/`cash.adjust`, 0046): cuando exista
+`PermisoExcepcion` formal, se conecta ahí, no antes. El cobro de upgrade y
+la compensación de downgrade reusan `register_stay_transaction()` (0026)
+-- no dependen de que Caja (0046) esté desplegada, tal como se pidió. La
+compensación de downgrade se registra como `type='payment'` con monto
+negativo (no `'refund'`, que en este ledger es positivo -- ver comentario
+completo en la migración); "quién autorizó" es
+`room_assignments.created_by` (ya `auth.uid()` vía el trigger genérico),
+sin columna nueva.
+
+Server Action: `changeRoomWithAuthorization()`
+(`src/modules/recepcion/actions/lifecycle.ts`) + `submitChangeRoom()`
+(`src/app/recepcion/actions.ts`). Query nueva: `listRoomChangeOptions()`
+(`src/modules/recepcion/queries/stays.ts`) -- a diferencia de
+`listRoomAssignmentOptions()` (sólo para el check-in guiado, excluye
+downgrades a propósito), ésta sí los incluye. UI: sección "Cambio de
+habitación" en `/recepcion?stayId=X&roomChangeStep=1` (ver P0-5).
+
+**Validado localmente** (Postgres 16, `has_permission` real): upgrade con
+cobro ($300) sube el saldo exactamente ese monto; upgrade de cortesía no
+mueve el saldo aunque se mande un `charge_amount` por error (se ignora);
+downgrade con compensación ($200) baja el saldo exactamente ese monto,
+registrado como `payment` negativo; upgrade/downgrade sin motivo rechaza
+con `REASON_REQUIRED`; un rol sin `room.change` rechaza con
+`PERMISSION_DENIED`. Pendiente de repetir contra Supabase real una vez
+aplicada `0051` (ver reporte de esta ronda).
+
+### P0-5: el menú de una estancia ya no ofrecía sólo lo válido para su estado
+
+Encontrado real: el modal de detalle de celda del Rack
+(`RackGrid.tsx`, `openCell`) tenía **tres enlaces idénticos** ("Expediente"
+/ "Check-In" / "Cobrar"), los tres a la misma URL, sin condicionar en
+absoluto por `cell.stayStatus` -- "Check-In" aparecía siempre, incluso
+para una estancia ya `in_house`. La tarjeta principal de
+`/recepcion?stayId=X` sí condicionaba bien sus botones (`Registrar
+llegada`/`Marcar No-Show`/`Marcar Walked`/`Entregar habitación`/`Hacer
+check-out`, cada uno sólo para su estado) -- el bug era específico del
+modal del Rack.
+
+Corregido: "Check-In" sólo para `expected`/`arrived`; "Cambio de
+habitación" (nuevo, P0-3) sólo para `checked_in`/`in_house`, enlazando a
+`?roomChangeStep=1`; "Cobrar" para cualquier estado con cuenta activa. Se
+agregó también el mismo botón "Cambio de habitación" a la tarjeta
+principal de acciones de Recepción, junto a los demás, condicionado igual.
+
+### P0-6: el buscador ignoraba por completo ocupantes/mascotas
+
+`searchAvailableOptions()` (`src/modules/reservaciones/queries/
+availability.ts`) sólo filtraba por fechas -- `paxAdults`/`paxChildren`/
+`hasPets` se leían del formulario pero nunca llegaban a la consulta.
+Cambiar esos campos SÍ disparaba una navegación nueva (es un `<form
+method="GET">`), pero el resultado no cambiaba: un tipo sin capacidad para
+6 adultos, o que no acepta mascotas, seguía apareciendo igual que con los
+filtros por defecto. Corregido agregando esos tres filtros a la función
+(compara contra `room_types.capacity_adults`/`capacity_children`/
+`accepts_pets`, ya leídos, nunca antes usados para filtrar) y pasándolos
+desde `reservaciones/page.tsx`. Validado en vivo contra Hotel Demo: sin
+filtro de mascotas, 4 tipos disponibles; con mascotas, sólo 2 (los que
+`accepts_pets`); con 6 adultos, 0 (ningún tipo tiene esa capacidad) --
+antes de este fix los tres casos habrían mostrado los mismos 4 tipos.
+
+### P0-7: el precio deja de ser un campo libre
+
+`create_quote_option()` (0048) aceptaba `p_nightly_rate_override` de
+cualquier usuario con `reservations.create`, sin motivo ni permiso
+adicional. `0052_quote_discount_authorization.sql` la recrea (mismo
+patrón 0037/0047: se quita/agrega parámetro de la firma, nunca se ignora)
+agregando `p_is_courtesy`/`p_discount_reason`: si el override difiere de
+`base_rate`, o se pide cortesía, exige
+`has_permission(hotel_id, 'reservations.discount')` (permiso nuevo,
+sembrado sólo a `hotel_admin` -- mismo criterio que `cash.refund`/
+`cash.adjust`, no a `front_desk`) + motivo no vacío, antes de calcular
+nada. Cortesía dejó el precio en 0. "Quién autorizó" sigue siendo
+`quote_options.created_by`; motivo/monto/cortesía se registran en el
+payload del evento de timeline (`quote.discount_authorized` en vez de
+`quote.issued`) -- regla 6, no una columna nueva.
+
+UI (`reservaciones/page.tsx`): el campo "Tarifa/noche" ahora es de sólo
+lectura (el precio de lista); un `<details>` colapsable "Descuento o
+cortesía" con el override + cortesía + motivo sólo se muestra si
+`hasPermission(hotelId, 'reservations.discount')` -- oculta el control a
+quien igual sería rechazado por el servidor (sólo UX, la autorización real
+sigue siendo el RPC).
+
+**Validado localmente**: `hotel_admin` sin override cotiza a `base_rate`
+sin pedir nada; con override y sin motivo, rechaza
+`DISCOUNT_REASON_REQUIRED`; con override y motivo, cotiza al nuevo precio;
+con cortesía, total `0.00`; `front_desk` con override y motivo rechaza
+`PERMISSION_DENIED` (no tiene `reservations.discount`); `front_desk` sin
+override sigue cotizando normal, sin regresión. Pendiente de repetir
+contra Supabase real una vez aplicada `0052`.
+
+### P0-8: era presentación, no cálculo -- confirmado explícitamente
+
+Se verificó primero si el saldo mismo estaba mal calculado: no -- en cada
+prueba de esta ronda (incluidas las de P0-3, cobro/compensación),
+`stay_accounts.balance` reflejó exactamente el monto esperado tras cada
+movimiento. El problema real era de presentación: la tarjeta "Cuenta de la
+estancia" (`/recepcion`) mostraba `${balance}` crudo, con sólo el color
+como pista -- un saldo a favor real se habría visto como `$-345`.
+
+`formatBalanceLabel()` ya existía, pero sólo dentro de Caja
+(`modules/caja/queries/payments.ts`) -- Recepción necesitaba la misma
+traducción sin depender de que Caja esté desplegada (pedido explícito), y
+regla 7 prohíbe importar entre módulos. Se movió a `src/lib/format.ts`
+(ya comparte `formatDate*` entre módulos) y Caja ahora la reexporta desde
+ahí -- una sola implementación, no dos (regla 6). Recepción la usa en las
+tres vistas donde mostraba el saldo crudo (tarjeta de cuenta, paso 1 del
+check-in guiado, resumen de la lista de estancias) y agrega "Total
+cargos"/"Total abonos" en la tarjeta principal, derivados del signo real
+de cada transacción (positivo/negativo), no de su `type` -- cubre
+`charge`/`refund`/`payment`/`adjustment` por igual sin listar tipos a
+mano.
+
+### Bug real encontrado preparando las pruebas: `reset_demo_hotel()` no podía limpiar un hotel con uso real (0053)
+
+Al intentar partir de un estado limpio para probar P0-3/P0-7 en vivo (tal
+como esta ronda lo exigía), `reset_demo_hotel()` (0050) falló contra el
+Hotel Demo real con `update or delete on table "reservations" violates
+foreign key constraint "leads_reservation_id_fkey"`. Causa: el hotel demo
+real ya tenía, por uso genuino de la app (no del seed -- 0050 nunca
+inserta `leads`), algún `lead` con `status='converted'` y
+`reservation_id` apuntando a una reserva de ese hotel; el orden de
+limpieza de 0050 borra `reservations` (línea 103) antes que `leads`
+(línea 107), y `leads.reservation_id` (0018) no tiene `on delete
+cascade`/`set null` -- Postgres rechaza el `DELETE` de la reserva
+mientras exista un lead convertido que la referencie. Nunca se detectó
+antes porque las pruebas de 0050 se hicieron contra un hotel demo recién
+creado, sin leads convertidos todavía; sólo se manifiesta después de que
+el hotel demo real acumula uso genuino entre un reset y el siguiente --
+exactamente el mismo tipo de hallazgo que la sección de Rack ya documentó
+para la migración `0033` sin aplicar ("que este archivo documente que
+algo ya se validó no es garantía de que el proyecto real esté en ese
+estado").
+
+Corregido en `0053_fix_reset_demo_hotel_leads_fk.sql`: antes de borrar
+`reservations`, desvincula (`reservation_id = null`) cualquier lead del
+hotel que apunte a una de sus reservas -- el lead en sí se sigue
+borrando dos líneas después, sin cambio. Mismo `create or replace`, sin
+tocar la firma ni el resto del cuerpo (recreación completa de la función
+porque no hay forma de insertar una sola línea en medio de un `CREATE OR
+REPLACE FUNCTION` ya aplicado sin repetir el cuerpo entero).
+
+**Segundo hallazgo de la misma familia, en la misma ronda de pruebas
+(reset inmediato después de aplicar 0053):** el reset volvió a fallar,
+ahora con `inventory_holds_converted_reservation_id_fkey`.
+`confirm_reservation_from_hold()` (0016) fija SIEMPRE
+`inventory_holds.status = 'converted'` +
+`converted_reservation_id = <la reserva recién creada>` en cada
+confirmación real -- es decir, TODO Hold confirmado por el flujo normal
+deja esta referencia, no sólo un caso raro como el lead convertido. Mismo
+patrón, mismo tipo de FK sin `on delete` (0018). Se descartó reordenar el
+bloque completo de `DELETE`s (`inventory_holds` también depende de
+`quote_options` sin cascada -- reordenar a ciegas podía introducir un
+problema distinto) a favor de la misma corrección quirúrgica: desvincular
+antes de borrar. Corregido en `0054_fix_reset_demo_hotel_holds_fk.sql`.
+Se verificó además, revisando todas las FK sin `on delete` que apuntan a
+`hotels`/`reservations`/`leads`/`inventory_holds`/`quote_options`/`quotes`/
+`reservation_stays` en el esquema completo, que no queda un tercer caso de
+este tipo: las únicas dos referencias "hacia atrás" contra `reservations`
+son exactamente `leads.reservation_id` (0053) e
+`inventory_holds.converted_reservation_id` (0054) -- el resto de FKs sin
+cascada encontradas (`reservations.lead_id`/`.quote_id`/`.hold_id`) son en
+sentido contrario (reservations es la fila hija ahí, ya se borra primero
+en el wipe), así que no bloquean nada.
+
+## Resolución del hotel actual: por qué no era cosmético
+
+Encontrado probando la ronda P0 en vivo, con una cuenta con dos
+membresías activas (`demo@hotelos.test`, dueño de dos hoteles demo):
+`getCurrentUserHotel()` (`src/lib/auth/session.ts`) resolvía "el hotel
+actual" con `.from("user_hotel_roles")...limit(1).maybeSingle()` **sin
+`order by`** -- sin garantía de orden, la misma sesión podía resolver a
+un hotel distinto entre requests. Se manifestó como `PGRST116` (0 filas)
+al pedir una estancia real bajo el `hotel_id` equivocado. El mismo patrón
+existía en `homeForCurrentUser()` (`src/app/login/actions.ts`), decidiendo
+a qué módulo aterriza un usuario justo después de iniciar sesión.
+
+No se trató como un caso raro a ignorar: HotelOS es multi-hotel por
+diseño (un dueño puede administrar más de un hotel, ver Plataforma/`/admin`
+más arriba) -- resolver "el primero" en silencio, sin forma de elegir,
+era un hueco de producto real, no sólo un bug técnico. Se corrigió en dos
+capas:
+
+1. **Orden determinista (mínimo viable).** `listActiveHotelMemberships()`
+   (nueva, `session.ts`) ordena `user_hotel_roles` por `created_at asc` --
+   la membresía más antigua es el hotel "de siempre" para quien nunca ha
+   elegido. `homeForCurrentUser()` gana el mismo `order by` sobre su
+   propia consulta (no se unificó con la función anterior: su proyección y
+   necesidad -- sólo el primer hotel y su `status` -- son distintas, y
+   duplicar un `order by` de una línea no es la duplicación que la regla 6
+   busca evitar).
+2. **Selector explícito de hotel**, porque un mínimo viable silencioso
+   seguía sin resolver el caso real (elegir CUÁL hotel operar, no sólo que
+   la elección por defecto sea estable). Cookie `selected_hotel_id`
+   (httpOnly, 1 año), fijada únicamente por `selectHotel()`
+   (`src/lib/auth/actions.ts`, Server Action nueva) -- que **siempre**
+   revalida contra `user_hotel_roles` que ese `hotel_id` es una membresía
+   activa real de ese usuario antes de fijar la cookie (regla 2: nunca
+   confiar en un hotel_id que venga del cliente sin validar en servidor;
+   un valor ajeno o inactivo se ignora en silencio, la sesión se queda en
+   el hotel que ya tenía). `getCurrentUserHotel()` usa la cookie si sigue
+   siendo válida; si no hay cookie o ya no aplica, cae al orden
+   determinista de (1). `AppShell` (`src/components/ui/AppShell.tsx`) sólo
+   muestra el selector (un `<select>` + botón "Ir", sin JS de cliente,
+   mismo patrón de formulario plano del resto del proyecto) cuando
+   `otherHotels` trae algo -- un usuario de un solo hotel no ve nada nuevo.
+
+`getCurrentUserHotel()` devuelve ahora también `otherHotels` (las demás
+membresías activas, para pintar el selector) -- las 5 páginas de módulo
+(`reservaciones`/`recepcion`/`rack`/`configuracion`/`caja`) pasan
+`hotelId`/`otherHotels` nuevos a `AppShell` en sus 10 usos (2 por página:
+la variante "módulo no incluido en el plan" y la principal).
+
+**Bug real encontrado validando el selector en vivo:** el primer cambio de
+hotel fijaba la cookie correctamente (confirmado leyendo la cookie real
+del navegador) pero el render inmediatamente después seguía mostrando el
+hotel anterior -- sólo una recarga dura o una navegación fresca mostraban
+el valor correcto. `revalidatePath("/", "layout")` en `selectHotel()` no
+bastaba por sí solo: invalida el lado del servidor, pero el Client Router
+Cache del navegador podía reusar el RSC ya prefetcheado con la cookie
+vieja cuando el destino (`returnTo`) era la URL EXACTA de la que se
+partió -- mismo síntoma, causa distinta, que el bug ya documentado en
+Configuración ("ningún `redirect()` de vuelta a la URL de origen es
+seguro sin invalidar la entrada de caché de esa URL exacta"). Corregido
+agregando un parámetro que cambia en cada cambio de hotel
+(`?hotelSwitchedAt=<timestamp>`) al `returnTo` antes de redirigir -- fuerza
+al navegador a tratarlo como una URL distinta y pedir el render fresco,
+mismo principio que `?reservationId=`/`?checkinStep=` ya usan en otros
+flujos para lo mismo. Validado en vivo con una cuenta real de dos
+membresías: resolución sin cookie estable en 3 llamadas repetidas (siempre
+la membresía más antigua); cambiar de hotel y volver a cargar la misma
+página 3 veces seguidas siempre refleja el hotel elegido; cambiar de
+regreso al otro hotel también refleja de inmediato, sin flash del valor
+anterior.
+
+## Handoff de demo P1, Tanda 1 (UI/UX de bajo riesgo)
+
+Nueve hallazgos (P1-1, P1-2, P1-3, P1-5, P1-6, P1-9, P1-10, P1-11, P1-13)
+de una lista de P1 más larga -- P1-4/P1-7/P1-8/P1-12/P1-14 quedan
+explícitamente para una tanda futura por tocar lógica de negocio real, y
+P2 no se tocó en absoluto. Validado en vivo contra Hotel Demo real
+(`reset_demo_hotel()` antes de probar).
+
+### P1-2: nombre de usuario, logo, shell bilingüe
+
+`getCurrentUserHotel()` (`src/lib/auth/session.ts`) ahora también resuelve
+`profiles.full_name` (o el correo si no lo ha llenado) en el mismo viaje ya
+abierto para el hotel actual -- se muestra en el sidebar junto al rol, que
+ahora es una etiqueta con más contraste en vez de texto plano.
+
+Logo del hotel: mismo patrón exacto que `brand_color` -- una URL en
+`hotel_policies.extra_settings.logo_url`, no una columna/tabla nueva ni
+subida de archivo (Supabase Storage no está en uso en el proyecto todavía;
+construir esa integración sólo para un logo sería infraestructura nueva,
+fuera del alcance "bajo riesgo" de esta ronda). `updateBrandLogo()` exige
+que la URL empiece con `http(s)://`; `AppShell` la muestra junto al nombre
+del hotel si existe, sin lugar para un ícono roto si no hay logo.
+
+Selector de idioma ES/EN: **shell-only**, decisión explícita del dueño del
+producto tras evaluar el esfuerzo real -- el proyecto no tenía ninguna
+infraestructura de i18n (cero librerías, cero strings extraídos);
+traducir el contenido de las ~15 pantallas de cada módulo es un esfuerzo
+grande, aparte, para una ronda futura. `src/lib/i18n.ts` tiene el
+diccionario mínimo de `AppShell` (nombres de módulo, "Rol", "Cerrar
+sesión", "Reiniciar", "Cambiar de hotel", "Idioma", "Ir") y `getLocale()`
+lee la cookie `locale`; `selectLocale()` (`src/lib/auth/actions.ts`) la
+fija con el mismo patrón que `selectHotel()`: `revalidatePath("/",
+"layout")` + un parámetro que cambia en el redirect
+(`?localeChangedAt=<timestamp>`) para que el Client Router Cache no sirva
+el idioma anterior (misma lección ya documentada arriba para el selector
+de hotel). `AppShell` pasó a ser un Server Component `async` para leer la
+cookie directamente, en vez de que cada una de las 5 páginas de módulo
+tuviera que resolverla y pasarla como prop.
+
+### P1-1: KPIs accionables y sticky (Recepción y Reservaciones)
+
+La barra de KPIs queda `sticky top-0` (con su propio fondo, para que la
+lista no se transparente al pasar por debajo) en ambas pantallas. En
+Recepción, cada KPI navega a la lista de Estancias filtrada por lo mismo
+que cuenta (`?filter=expected|in_house|pending`) -- `KpiCard` ganó un
+`href` opcional (se vuelve `<Link>` en vez de `<div>`, mismo componente
+para ambos casos). En Reservaciones, los 3 KPIs (Reservas/Leads/Holds
+activos) ya son cada uno una sección propia de la página con un solo tipo
+de contenido -- "su lista filtrada" es directamente esa sección, así que
+navegan por ancla (`#reservas`/`#leads`/`#holds-activos`; `Card` ganó un
+`id` opcional) en vez de inventar un filtro que no aportaría nada nuevo.
+
+No se movió la barra al lado derecho -- pedido explícito de no decidir
+eso por cuenta propia, es una decisión de diseño pendiente del dueño del
+producto. Sugerencia para cuando se revise: mover los KPIs a una columna
+lateral dejaría más ancho para la lista/tabla principal en pantallas
+anchas, pero cambia el layout de las 5 páginas de módulo, no sólo estas
+dos -- vale la pena decidirlo una sola vez para todo `AppShell`, no
+página por página.
+
+### P1-3: prioridad y check-out oculto por defecto (Recepción)
+
+Dentro de la lista de Estancias, las que tienen una acción pendiente
+(`next_action !== 'ninguna'` y no `checked_out`/`no_show`/`walked`) van
+primero -- un `sort()` de JavaScript, estable desde ES2019, así que dentro
+de cada grupo (pendiente / no pendiente) se conserva el orden anterior
+(`created_at desc`) sin necesitar un criterio de desempate adicional. Las
+que ya hicieron check-out se ocultan por defecto -- nunca para siempre:
+un link "Mostrar N con check-out ya hecho" las revela
+(`?showCheckedOut=1`), con su contraparte para volver a ocultarlas.
+
+### P1-5: "Sin acción pendiente" ya no es ambiguo
+
+`next_action = 'ninguna'` (`recompute_stay_next_action()`, 0026) cubre dos
+situaciones reales y muy distintas: un huésped `in_house` con la cuenta al
+corriente (no hay nada que hacer hasta su check-out) y una estancia ya
+**cerrada** (`checked_out`/`no_show`/`walked`, el ciclo completo terminó).
+No se renombró el estado -- el badge de arriba de la estancia ya distingue
+el status real -- se agregó una línea de ayuda en el detalle que aclara
+cuál de las dos situaciones aplica según `detail.stay.status`.
+
+### P1-6: sección de activos ausente, no vacía con un aviso
+
+Si `hotel_policies.checkin_assets` está vacío, la tarjeta "Activos
+entregados" completa desaparece de la vista de una estancia -- nunca el
+mensaje "Este hotel no tiene activos configurados en su política de
+check-in" que mostraba antes. Confirmado contra Hotel Demo real:
+`checkin_assets = []`, la sección no aparece en absoluto.
+
+### P1-9: el buscador de huésped ignoraba a quien nunca tuvo un lead
+
+`GuestSearchField` (Reservaciones) sugería sólo contra `leads` -- un
+huésped cuya única fila en el sistema es una `reservations` directa (una
+cancelada, por ejemplo, como el caso real "Perla Treviño" que el dueño
+encontró en la demo) nunca tuvo un `lead` propio y por eso nunca aparecía
+en las sugerencias, sin importar cuántas veces se buscara su nombre. El
+directorio de sugerencias ahora combina `leads` con `reservations` (ya
+cargada en la misma página para el listado de abajo -- sólo se le agregó
+`primary_guest_email`/`primary_guest_phone` al `select()` que ya existía,
+sin consulta nueva), incluyendo a propósito `cancelled`/`no_show`/
+`completed`, deduplicado por correo (o teléfono, o nombre si no hay
+ninguno de los dos) para no repetir a la misma persona si ya tiene lead Y
+reserva. Validado en vivo: buscar "Trevi" contra Hotel Demo recién
+reiniciado sugiere "Nadia Treviño" -- la reserva cancelada del seed
+(`0050`, nunca inserta `leads`) que antes de este fix era invisible para
+el buscador.
+
+### P1-10: historial de reservas colapsado
+
+De entrada sólo se ve "Reservas próximas" (`status = 'confirmed'`, lo que
+importa día a día); el historial completo (pasadas/canceladas/no-show)
+queda en un `<details>` al pie con totales por categoría en el `<summary>`
+-- mismo patrón `<details>` que esta página ya usa para "Descuento o
+cortesía" (P0-7), sin JS de cliente. Validado en vivo: "Reservas próximas
+(8)" visible de entrada contra 46 reservas totales; el resumen colapsado
+muestra "(46) — Pasadas: 35 · Canceladas: 2 · No-show: 1", números reales
+del seed.
+
+### P1-11: editar ya no salta al final de la lista
+
+Editar un tipo de habitación o una habitación física (Configuración)
+navegaba a `?editRoomTypeId=`/`?editRoomId=` y el formulario de edición
+aparecía reutilizando la posición del formulario "crear nuevo", siempre al
+final de cada columna -- el usuario perdía el scroll de donde estaba en
+una lista larga. `src/components/ui/Modal.tsx` (`<dialog>` nativo, nuevo)
+resuelve esto: el estado real sigue viviendo en la URL (mismo patrón ya
+establecido, sin reinventar nada), el componente sólo sincroniza
+open/close de un `<dialog>` con esa prop vía `showModal()`/`close()`.
+Cerrar (Escape, click en el fondo, botón ✕) navega de vuelta a la URL sin
+el parámetro de edición.
+
+Dos bugs reales encontrados probando esto en vivo:
+- El `<Link>` de "Editar" seguía subiendo el scroll a la parte superior al
+  cambiar el query param -- comportamiento default de `next/link`, y
+  justo lo que este punto pidió evitar. Corregido con `scroll={false}` en
+  esos `Link` (y los de "Cancelar" dentro del popup) y en el
+  `router.push()` que dispara el cierre del `<dialog>`.
+- El `<dialog>` aparecía pegado a la esquina superior izquierda en vez de
+  centrado: el reset de Tailwind (`preflight`) pone `margin: 0` en todos
+  los elementos, incluido `<dialog>`, eliminando el `margin: auto` que el
+  navegador usa por default para auto-centrarlo. Corregido con centrado
+  explícito (`fixed` + `top-1/2 left-1/2` + `-translate-x-1/2
+  -translate-y-1/2`) en vez de depender del comportamiento nativo.
+
+Validado en vivo con Playwright: el popup abre con los datos correctos
+precargados; guardar refleja el cambio de inmediato en la lista de atrás;
+la posición de scroll (probado en 300px) se mantiene idéntica antes,
+durante y después de cerrar el popup, en las tres formas de cerrarlo.
+
+### P1-13: "Marcar sucia" sí tiene un flujo real -- confirmado, no removido
+
+Se pidió confirmar en el código (no asumir) qué hace este botón antes de
+decidir su destino. Confirmado: `setRoomClean()`
+(`src/modules/configuracion/actions/rooms.ts`) actualiza `rooms.is_clean`
+de verdad, registra `room.marked_clean`/`room.marked_dirty` en el
+timeline, y ese valor alimenta dos consumidores reales -- el gate de
+`reception_settings.checkin_permite_sucia` dentro de `check_in()` (0026) y
+el aviso "(sucia)" que ya muestran `listRoomAssignmentOptions()`/
+`listRoomChangeOptions()` al asignar o cambiar de habitación en Recepción.
+No es un botón sin función: se conservó.
+
+Hallazgo real, no corregido a propósito (fuera de alcance -- tocaría la
+función SQL de checkout, lógica de negocio explícitamente vetada en esta
+ronda): **ninguna función del flujo de check-out marca sucia una
+habitación automáticamente** -- `attempt_check_out()` nunca toca
+`is_clean`. Como Housekeeping no existe todavía, este botón es hoy la
+**única** forma de que `is_clean` pase a `false` en la operación real (el
+demo la usa vía `reset_demo_hotel()`, pero eso es sólo el seed). Se
+documentó esto con una línea de ayuda junto al badge Limpia/Sucia en vez
+de dejar el botón sin contexto -- decidir si el check-out debería marcar
+sucia automáticamente queda para cuando se revise el flujo de checkout a
+propósito (P1/P2 futuro con lógica de negocio, no esta ronda).
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
@@ -1308,7 +2508,8 @@ src/
     reservaciones/        Página de prueba del módulo: buscar → cotizar → Hold → confirmar → listado.
     recepcion/            Página de prueba del módulo: llegada → check-in → asignar → entregar → cobrar → check-out.
     rack/                 Cuadrícula habitación×fecha (capa de vista, ver sección Rack).
-    configuracion/        Página de prueba del módulo: catálogo de habitaciones, políticas del hotel, usuarios y roles (tabs).
+    configuracion/        Página de prueba del módulo: catálogo de habitaciones, políticas del hotel, métodos de pago/Caja, usuarios y roles (tabs).
+    caja/                 Página de prueba del módulo: turno de caja, cobrar/reembolsar por reserva, pendientes de validar, ajuste manual de estancia.
   proxy.ts                Refresca la sesión de Supabase en cada request (convención Next.js 16; reemplaza a middleware.ts).
   lib/
     supabase/
@@ -1329,8 +2530,8 @@ src/
       actions/             lifecycle.ts (transiciones de Estancia), account.ts (cuenta/transacciones), service.ts (solicitudes/incidencias/activos).
       queries/             stays.ts — listado, detalle, habitaciones asignables, config y catálogo de activos.
     configuracion/
-      actions/             rooms.ts (tipos/habitaciones), policies.ts (hotel_policies/reception_settings), staff.ts (alta/rol/activación).
-      queries/             rooms.ts, policies.ts, staff.ts — lecturas propias, no importadas de otros módulos (regla 7).
+      actions/             rooms.ts (tipos/habitaciones), policies.ts (hotel_policies/reception_settings), staff.ts (alta/rol/activación), payments.ts (payment_methods/cash_settings -- lectura/escritura propia, no importa modules/caja/, regla 7).
+      queries/             rooms.ts, policies.ts, staff.ts, payments.ts — lecturas propias, no importadas de otros módulos (regla 7).
     rack/
       queries/             grid.ts — getRackGrid() (capa de vista, combina Reservaciones/Recepción/Habitaciones, sin tabla propia).
       actions/             assignments.ts — assignRoomFromRack(), reusa assign_room() (0026) vía RPC.
@@ -1341,7 +2542,12 @@ src/
       evaluators/             arrivalNotRegistered.ts — un evaluador de TS por rule.code, registrado a mano en engine.ts.
       queries/             priorities.ts — listHotelPriorities(), getHotelPriority().
       actions/             lifecycle.ts — acknowledge/assign/startProgress/resolve/dismiss, todas requirePermission('priorities.manage').
-    habitaciones/ caja/  (carpetas listas, sin lógica todavía)
+    habitaciones/
+      queries/             roomTypes.ts, rooms.ts — catálogo, amenidades/activos base, resolveRoomAmenities()/resolveRoomAssets() (herencia con excepción).
+      actions/             roomTypes.ts (capacidad vía RPC con ImpactAnalysis, catálogo de amenidades), rooms.ts (deactivate/reactivate vía RPC, excepciones), snapshot.ts (congelarConfiguracionComercial(), propio punto de entrada -- Reservaciones llama al RPC directo, no este archivo).
+    caja/
+      actions/             payments.ts (registerPaymentWithMovements/registerRefund/validatePayment), shifts.ts (openShift/closeShift/registerCashExpense), adjustments.ts (registerStayAdjustment).
+      queries/             payments.ts (metodos, saldo de reserva, pagos, pendientes de validar), shifts.ts (turno abierto/historial/movimientos), settings.ts (cash_settings).
     (ver src/modules/README.md para la convención completa)
   components/ui/          Componentes de UI compartidos entre módulos.
   types/
@@ -1371,12 +2577,12 @@ Postgres 16 local (con un stub mínimo del esquema `auth` de Supabase) y se
 probó explícitamente que:
 
 - Un usuario con rol en el Hotel A no puede ver hoteles, ni eventos de
-  timeline, de un Hotel B.
+timeline, de un Hotel B.
 - `has_permission()` devuelve `true`/`false` correctamente según el rol
-  asignado (ej. `front_desk` puede `reservations.create` pero no
-  `hotel.settings.manage`).
+asignado (ej. `front_desk` puede `reservations.create` pero no
+`hotel.settings.manage`).
 - Un intento de insertar un evento de timeline en el hotel de otro usuario,
-  suplantando su propio `actor_user_id`, es bloqueado por RLS.
+suplantando su propio `actor_user_id`, es bloqueado por RLS.
 
 ## Reglas para cualquier sesión futura de Claude Code (o humano)
 

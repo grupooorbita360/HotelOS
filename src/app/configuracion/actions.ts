@@ -11,8 +11,9 @@ import {
   setRoomActive,
   setRoomClean,
 } from "@/modules/configuracion/actions/rooms";
-import { updateHotelPolicies, updateReceptionSettings, updateBrandColor } from "@/modules/configuracion/actions/policies";
+import { updateHotelPolicies, updateReceptionSettings, updateBrandColor, updateBrandLogo } from "@/modules/configuracion/actions/policies";
 import { addStaffMember, changeStaffRole, setStaffActive } from "@/modules/configuracion/actions/staff";
+import { createPaymentMethod, setPaymentMethodActive, updateCashSettings } from "@/modules/configuracion/actions/payments";
 
 function tabUrl(tab: string, extra = "") {
   return `/configuracion?tab=${tab}${extra}`;
@@ -98,7 +99,8 @@ export async function submitSetRoomActive(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const roomId = String(formData.get("roomId"));
   const isActive = formData.get("isActive") === "true";
-  await runOrError("habitaciones", () => setRoomActive(hotelId, roomId, isActive));
+  const reason = String(formData.get("reason") || "") || undefined;
+  await runOrError("habitaciones", () => setRoomActive(hotelId, roomId, isActive, reason));
 }
 
 export async function submitSetRoomClean(formData: FormData) {
@@ -140,6 +142,12 @@ export async function submitUpdateBrandColor(formData: FormData) {
   await runOrError("politicas", () => updateBrandColor(hotelId, color));
 }
 
+export async function submitUpdateBrandLogo(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const logoUrl = String(formData.get("logoUrl") || "").trim() || null;
+  await runOrError("politicas", () => updateBrandLogo(hotelId, logoUrl));
+}
+
 export async function submitAddStaffMember(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const email = String(formData.get("email"));
@@ -160,4 +168,37 @@ export async function submitSetStaffActive(formData: FormData) {
   const userHotelRoleId = String(formData.get("userHotelRoleId"));
   const isActive = formData.get("isActive") === "true";
   await runOrError("usuarios", () => setStaffActive(hotelId, userHotelRoleId, isActive));
+}
+
+export async function submitCreatePaymentMethod(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  await runOrError("caja", () =>
+    createPaymentMethod(hotelId, {
+      name: String(formData.get("name")),
+      type: String(formData.get("type")) as "cash" | "card" | "transfer" | "other",
+      requiereReferencia: formData.get("requiereReferencia") === "on",
+      requiereValidacionManual: formData.get("requiereValidacionManual") === "on",
+      generaComision: formData.get("generaComision") === "on",
+      proveedor: String(formData.get("proveedor") || "") || undefined,
+    }),
+  );
+}
+
+export async function submitSetPaymentMethodActive(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const methodId = String(formData.get("methodId"));
+  const isActive = formData.get("isActive") === "true";
+  await runOrError("caja", () => setPaymentMethodActive(hotelId, methodId, isActive));
+}
+
+export async function submitUpdateCashSettings(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  await runOrError("caja", () =>
+    updateCashSettings(hotelId, {
+      usaTurnosCaja: formData.get("usaTurnosCaja") === "on",
+      requiereFacturacionFiscal: formData.get("requiereFacturacionFiscal") === "on",
+      rfcHotel: String(formData.get("rfcHotel") || "") || undefined,
+      regimenFiscal: String(formData.get("regimenFiscal") || "") || undefined,
+    }),
+  );
 }

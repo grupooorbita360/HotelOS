@@ -97,6 +97,22 @@ export async function getHotelFeatures(hotelId: string): Promise<Set<FeatureKey>
   return new Set(data as FeatureKey[]);
 }
 
+/**
+ * Lanza un error legible si la feature no está encendida para el hotel.
+ * Se llama al inicio de cada Server Action que pertenezca a una feature
+ * conmutable (ej. module.caja) -- nunca cacheado, siempre justo antes de
+ * la mutación, porque un override puede encenderse/apagarse en cualquier
+ * momento (ver CLAUDE.md, sección Plataforma).
+ */
+export async function assertFeatureEnabled(hotelId: string, feature: FeatureKey): Promise<void> {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("has_feature", { p_hotel_id: hotelId, p_feature_key: feature });
+  if (error) throw error;
+  if (!data) {
+    throw new Error(`FEATURE_NOT_ENABLED: ${feature} no está incluido en tu plan`);
+  }
+}
+
 export const PLAN_LABELS: Record<string, string> = {
   basico: "Básico",
   plus: "Plus",

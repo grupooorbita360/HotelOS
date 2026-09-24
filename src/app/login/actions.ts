@@ -13,10 +13,15 @@ import { createClient } from "@/lib/supabase/server";
 async function homeForCurrentUser(): Promise<string> {
   const supabase = await createClient();
 
+  // order by created_at: mismo criterio determinista que getCurrentUserHotel()
+  // (src/lib/auth/session.ts) -- sin esto, un usuario con más de una
+  // membresía activa podía aterrizar en un hotel distinto en cada login
+  // (bug real, ver CLAUDE.md).
   const { data: membership } = await supabase
     .from("user_hotel_roles")
     .select("hotel_id, hotels(status)")
     .eq("is_active", true)
+    .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
 

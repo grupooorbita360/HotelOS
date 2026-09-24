@@ -27,6 +27,7 @@ export interface Database {
           status: HotelStatus;
           timezone: string;
           country: string | null;
+          moneda_base: string;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -40,6 +41,7 @@ export interface Database {
           status?: HotelStatus;
           timezone?: string;
           country?: string | null;
+          moneda_base?: string;
         };
         Update: Partial<Database["public"]["Tables"]["hotels"]["Insert"]>;
         Relationships: [];
@@ -366,10 +368,17 @@ export interface Database {
           hotel_id: string;
           name: string;
           code: string;
+          description: string | null;
           capacity_adults: number;
           capacity_children: number;
           accepts_pets: boolean;
+          base_adults: number;
+          max_adults: number;
+          max_children: number;
+          max_pets: number;
           base_rate: number;
+          orden_comercial: number;
+          photos: string[];
           is_active: boolean;
           created_at: string;
           created_by: string | null;
@@ -381,13 +390,23 @@ export interface Database {
           hotel_id: string;
           name: string;
           code: string;
+          description?: string | null;
           capacity_adults?: number;
           capacity_children?: number;
           accepts_pets?: boolean;
+          base_adults?: number;
+          max_adults?: number;
+          max_children?: number;
+          max_pets?: number;
           base_rate?: number;
+          orden_comercial?: number;
+          photos?: string[];
           is_active?: boolean;
         };
-        Update: Partial<Database["public"]["Tables"]["room_types"]["Insert"]>;
+        // base_adults/max_adults/max_children/max_pets NO se editan por
+        // UPDATE directo -- sólo vía update_room_type_capacity() (0039,
+        // ImpactAnalysis). El resto de campos sí acepta UPDATE normal.
+        Update: Partial<Omit<Database["public"]["Tables"]["room_types"]["Insert"], "base_adults" | "max_adults" | "max_children" | "max_pets">>;
         Relationships: [];
       };
       rooms: {
@@ -397,9 +416,14 @@ export interface Database {
           room_type_id: string;
           code: string;
           building: string | null;
+          floor: string | null;
           bed_type: string | null;
+          photos: string[];
           is_active: boolean;
           is_clean: boolean;
+          motivo_inactivacion: string | null;
+          inactive_at: string | null;
+          inactive_by: string | null;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -411,11 +435,16 @@ export interface Database {
           room_type_id: string;
           code: string;
           building?: string | null;
+          floor?: string | null;
           bed_type?: string | null;
+          photos?: string[];
           is_active?: boolean;
           is_clean?: boolean;
         };
-        Update: Partial<Database["public"]["Tables"]["rooms"]["Insert"]>;
+        // is_active/motivo_inactivacion/inactive_at/inactive_by NO se editan
+        // por UPDATE directo -- sólo vía deactivate_room()/reactivate_room()
+        // (0039, ImpactAnalysis + motivo obligatorio).
+        Update: Partial<Omit<Database["public"]["Tables"]["rooms"]["Insert"], "is_active">>;
         Relationships: [
           {
             foreignKeyName: "rooms_room_type_id_fkey";
@@ -425,6 +454,125 @@ export interface Database {
             referencedColumns: ["id"];
           },
         ];
+      };
+      catalogo_amenidades: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          name: string;
+          es_promesa_comercial: boolean;
+          is_active: boolean;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          name: string;
+          es_promesa_comercial?: boolean;
+          is_active?: boolean;
+        };
+        Update: Partial<Database["public"]["Tables"]["catalogo_amenidades"]["Insert"]>;
+        Relationships: [];
+      };
+      tipo_habitacion_amenidad: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_type_id: string;
+          amenidad_id: string;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_type_id: string; amenidad_id: string };
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "tipo_habitacion_amenidad_amenidad_id_fkey";
+            columns: ["amenidad_id"];
+            isOneToOne: false;
+            referencedRelation: "catalogo_amenidades";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      habitacion_amenidad_excepcion: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_id: string;
+          amenidad_id: string;
+          tipo_excepcion: "AGREGA" | "EXCLUYE";
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_id: string; amenidad_id: string; tipo_excepcion: "AGREGA" | "EXCLUYE" };
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "habitacion_amenidad_excepcion_amenidad_id_fkey";
+            columns: ["amenidad_id"];
+            isOneToOne: false;
+            referencedRelation: "catalogo_amenidades";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      tipo_habitacion_activo: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_type_id: string;
+          asset_name: string;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_type_id: string; asset_name: string };
+        Update: never;
+        Relationships: [];
+      };
+      habitacion_activo_excepcion: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          room_id: string;
+          asset_name: string;
+          tipo_excepcion: "AGREGA" | "EXCLUYE";
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: { id?: string; hotel_id: string; room_id: string; asset_name: string; tipo_excepcion: "AGREGA" | "EXCLUYE" };
+        Update: never;
+        Relationships: [];
+      };
+      snapshot_comercial_habitacion: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          reservation_id: string;
+          room_type_id: string;
+          room_id: string | null;
+          base_adults: number;
+          max_adults: number;
+          max_children: number;
+          max_pets: number;
+          amenidades_prometidas: Json;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
       };
       leads: {
         Row: {
@@ -537,6 +685,7 @@ export interface Database {
           taxes?: number;
           total: number;
           rules_applied?: Json;
+          created_by: string;
         };
         Update: Partial<Database["public"]["Tables"]["quote_options"]["Insert"]>;
         Relationships: [
@@ -739,6 +888,7 @@ export interface Database {
           amount_local: number;
           method: string;
           status: string;
+          payment_method_id: string | null;
           receipt_url: string | null;
           notes: string | null;
           created_at: string;
@@ -757,6 +907,7 @@ export interface Database {
           amount_local: number;
           method: string;
           status?: string;
+          payment_method_id?: string | null;
           receipt_url?: string | null;
           notes?: string | null;
         };
@@ -767,6 +918,165 @@ export interface Database {
             columns: ["reservation_id"];
             isOneToOne: false;
             referencedRelation: "reservations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "payments_payment_method_id_fkey";
+            columns: ["payment_method_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_methods";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      payment_methods: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          name: string;
+          type: string;
+          is_active: boolean;
+          requiere_referencia: boolean;
+          requiere_autorizacion: boolean;
+          requiere_terminal: boolean;
+          permite_moneda_extranjera: boolean;
+          requiere_validacion_manual: boolean;
+          genera_comision: boolean;
+          proveedor: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          name: string;
+          type: string;
+          is_active?: boolean;
+          requiere_referencia?: boolean;
+          requiere_autorizacion?: boolean;
+          requiere_terminal?: boolean;
+          permite_moneda_extranjera?: boolean;
+          requiere_validacion_manual?: boolean;
+          genera_comision?: boolean;
+          proveedor?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["payment_methods"]["Insert"]>;
+        Relationships: [];
+      };
+      payment_movements: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          payment_id: string;
+          payment_method_id: string;
+          amount: number;
+          reference: string | null;
+          validated_at: string | null;
+          validated_by: string | null;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          hotel_id: string;
+          payment_id: string;
+          payment_method_id: string;
+          amount: number;
+          reference?: string | null;
+        };
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "payment_movements_payment_id_fkey";
+            columns: ["payment_id"];
+            isOneToOne: false;
+            referencedRelation: "payments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "payment_movements_payment_method_id_fkey";
+            columns: ["payment_method_id"];
+            isOneToOne: false;
+            referencedRelation: "payment_methods";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      cash_settings: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          usa_turnos_caja: boolean;
+          requiere_facturacion_fiscal: boolean;
+          rfc_hotel: string | null;
+          regimen_fiscal: string | null;
+          extra_settings: Json;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          hotel_id: string;
+          usa_turnos_caja?: boolean;
+          requiere_facturacion_fiscal?: boolean;
+          rfc_hotel?: string | null;
+          regimen_fiscal?: string | null;
+          extra_settings?: Json;
+        };
+        Update: Partial<Database["public"]["Tables"]["cash_settings"]["Insert"]>;
+        Relationships: [];
+      };
+      cash_shifts: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          status: string;
+          fondo_inicial: number;
+          opened_at: string;
+          opened_by: string | null;
+          efectivo_contado: number | null;
+          efectivo_esperado: number | null;
+          diferencia: number | null;
+          closed_at: string | null;
+          closed_by: string | null;
+          notes: string | null;
+          created_at: string;
+          created_by: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
+      cash_movements: {
+        Row: {
+          id: string;
+          hotel_id: string;
+          cash_shift_id: string;
+          type: string;
+          source: string;
+          amount: number;
+          concept: string;
+          category: string | null;
+          receipt_url: string | null;
+          payment_movement_id: string | null;
+          stay_transaction_id: string | null;
+          authorized_by: string | null;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: never;
+        Update: never;
+        Relationships: [
+          {
+            foreignKeyName: "cash_movements_cash_shift_id_fkey";
+            columns: ["cash_shift_id"];
+            isOneToOne: false;
+            referencedRelation: "cash_shifts";
             referencedColumns: ["id"];
           },
         ];
@@ -988,6 +1298,10 @@ export interface Database {
         Args: { p_hotel_id: string; p_permission_code: string };
         Returns: boolean;
       };
+      user_hotel_ids: {
+        Args: Record<PropertyKey, never>;
+        Returns: string[];
+      };
       check_availability: {
         Args: {
           p_hotel_id: string;
@@ -1013,6 +1327,21 @@ export interface Database {
         };
         Returns: Database["public"]["Tables"]["inventory_holds"]["Row"];
       };
+      create_quote_option: {
+        Args: {
+          p_quote_id: string;
+          p_room_type_id: string;
+          p_check_in: string;
+          p_check_out: string;
+          p_adults?: number;
+          p_children?: number;
+          p_has_pets?: boolean;
+          p_nightly_rate_override?: number | null;
+          p_is_courtesy?: boolean;
+          p_discount_reason?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["quote_options"]["Row"];
+      };
       confirm_reservation_from_hold: {
         Args: {
           p_hold_id: string;
@@ -1020,7 +1349,6 @@ export interface Database {
           p_primary_guest_email?: string | null;
           p_primary_guest_phone?: string | null;
           p_channel?: string;
-          p_rate_total?: number;
           p_cancellation_policy_snapshot?: Json;
           p_adults?: number;
           p_children?: number;
@@ -1041,6 +1369,10 @@ export interface Database {
         Args: Record<PropertyKey, never>;
         Returns: number;
       };
+      reset_demo_hotel: {
+        Args: Record<PropertyKey, never>;
+        Returns: Json;
+      };
       can_deliver_room: {
         Args: { p_stay_id: string };
         Returns: { allowed: boolean; reason: string | null }[];
@@ -1052,6 +1384,10 @@ export interface Database {
       register_arrival: {
         Args: { p_stay_id: string };
         Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
+      recompute_stay_next_action: {
+        Args: { p_stay_id: string };
+        Returns: undefined;
       };
       check_in: {
         Args: { p_stay_id: string };
@@ -1087,6 +1423,56 @@ export interface Database {
         Args: { p_transaction_id: string; p_reason?: string | null };
         Returns: Database["public"]["Tables"]["stay_transactions"]["Row"];
       };
+      // Caja (0046).
+      register_payment_with_movements: {
+        Args: {
+          p_hotel_id: string;
+          p_reservation_id: string;
+          p_type: string;
+          p_movements: Json;
+          p_currency?: string;
+          p_notes?: string | null;
+          p_confirm_overpayment?: boolean;
+        };
+        Returns: Database["public"]["Tables"]["payments"]["Row"];
+      };
+      register_refund: {
+        Args: {
+          p_hotel_id: string;
+          p_reservation_id: string;
+          p_original_payment_id: string | null;
+          p_amount: number;
+          p_payment_method_id: string;
+          p_reason: string;
+        };
+        Returns: Database["public"]["Tables"]["payments"]["Row"];
+      };
+      validate_payment: {
+        Args: { p_payment_id: string };
+        Returns: Database["public"]["Tables"]["payments"]["Row"];
+      };
+      register_stay_adjustment: {
+        Args: { p_stay_id: string; p_amount: number; p_concept: string };
+        Returns: Database["public"]["Tables"]["stay_transactions"]["Row"];
+      };
+      open_cash_shift: {
+        Args: { p_hotel_id: string; p_fondo_inicial?: number; p_notes?: string | null };
+        Returns: Database["public"]["Tables"]["cash_shifts"]["Row"];
+      };
+      close_cash_shift: {
+        Args: { p_shift_id: string; p_efectivo_contado: number; p_notes?: string | null };
+        Returns: Database["public"]["Tables"]["cash_shifts"]["Row"];
+      };
+      register_cash_expense: {
+        Args: {
+          p_shift_id: string;
+          p_amount: number;
+          p_concept: string;
+          p_category?: string | null;
+          p_receipt_url?: string | null;
+        };
+        Returns: Database["public"]["Tables"]["cash_movements"]["Row"];
+      };
       attempt_check_out: {
         Args: { p_stay_id: string };
         Returns: Database["public"]["Tables"]["stays"]["Row"];
@@ -1097,6 +1483,17 @@ export interface Database {
       };
       assign_room_for_checkin: {
         Args: { p_stay_id: string; p_room_id: string };
+        Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
+      };
+      change_room_with_authorization: {
+        Args: {
+          p_stay_id: string;
+          p_new_room_id: string;
+          p_reason?: string | null;
+          p_is_courtesy?: boolean;
+          p_charge_amount?: number | null;
+          p_compensation_amount?: number | null;
+        };
         Returns: Database["public"]["Tables"]["room_assignments"]["Row"];
       };
       upsert_hotel_priority: {
@@ -1147,6 +1544,28 @@ export interface Database {
       dismiss_hotel_priority: {
         Args: { p_priority_id: string; p_reason: string };
         Returns: Database["public"]["Tables"]["hotel_priorities"]["Row"];
+      };
+      // Habitaciones (0039).
+      congelar_configuracion_comercial: {
+        Args: { p_reservation_id: string };
+        Returns: Database["public"]["Tables"]["snapshot_comercial_habitacion"]["Row"];
+      };
+      deactivate_room: {
+        Args: { p_room_id: string; p_reason: string };
+        Returns: Database["public"]["Tables"]["rooms"]["Row"];
+      };
+      reactivate_room: {
+        Args: { p_room_id: string };
+        Returns: Database["public"]["Tables"]["rooms"]["Row"];
+      };
+      update_room_type_capacity: {
+        Args: { p_room_type_id: string; p_base_adults: number; p_max_adults: number; p_max_children: number; p_max_pets: number };
+        Returns: Database["public"]["Tables"]["room_types"]["Row"];
+      };
+      // Plataforma (0039/0040).
+      assert_hotel_member: {
+        Args: { p_hotel_id: string };
+        Returns: undefined;
       };
       has_feature: {
         Args: { p_hotel_id: string; p_feature_key: string };

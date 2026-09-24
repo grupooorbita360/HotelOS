@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
+import { hasPermission } from "@/lib/auth/permissions";
 import { getHotelFeatures } from "@/lib/auth/platform";
 import { signOut } from "@/app/login/actions";
 import { formatDate, formatDateRange, formatDateTime } from "@/lib/format";
@@ -26,6 +27,16 @@ import {
   submitCancelReservation,
   submitRegisterAdditionalPayment,
 } from "./actions";
+
+// payments.method ya no está limitado a card/transfer (0046, Caja amplió el
+// catálogo para aceptar cash/other) -- este mapa evita mostrar "transferencia"
+// para un pago que en realidad fue en efectivo.
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  cash: "efectivo",
+  card: "tarjeta",
+  transfer: "transferencia",
+  other: "otro",
+};
 
 export default async function ReservacionesPage({
   searchParams,
@@ -78,11 +89,15 @@ export default async function ReservacionesPage({
   if (!features.has("module.reservaciones")) {
     return (
       <AppShell
+        hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
+        userDisplayName={hotel.userDisplayName}
         roleName={hotel.roleName}
         current="reservaciones"
         resetHref="/reservaciones"
         brandColor={hotel.brandColor}
+        brandLogoUrl={hotel.brandLogoUrl}
+        otherHotels={hotel.otherHotels}
         features={[...features]}
       >
         <Card className="space-y-3">
@@ -127,33 +142,114 @@ export default async function ReservacionesPage({
 
   const availableOptions =
     !quoteOption && !hold && params.checkIn && params.checkOut && !searchDateError
-      ? await searchAvailableOptions(hotel.hotelId, params.checkIn, params.checkOut)
+      ? await searchAvailableOptions(hotel.hotelId, params.checkIn, params.checkOut, {
+          paxAdults: Number(params.adults ?? "1"),
+          paxChildren: Number(params.children ?? "0"),
+          hasPets: params.hasPets === "on",
+        })
       : null;
+
+  // P0-7 (handoff de demo): el precio deja de ser editable libremente --
+  // sólo quien tiene reservations.discount ve el control de "Descuento o
+  // cortesía". Es sólo UX (oculta un control que igual rechazaría el
+  // servidor); la autorización real vive en create_quote_option() (0052).
+  const canDiscount = availableOptions ? await hasPermission(hotel.hotelId, "reservations.discount") : false;
 
   // Solo lo que el buscador de huesped (Client Component) necesita -- no cruza
   // el limite servidor/cliente el resto de cada fila de lead (fechas, canal, etc.).
-  const guestDirectory = leads.map((l) => ({
-    id: l.id,
-    guest_name: l.guest_name,
-    guest_email: l.guest_email,
-    guest_phone: l.guest_phone,
-  }));
+  //
+  // P1-9 (handoff de demo): antes sólo salía de `leads` -- un huésped cuya
+  // única fila es una `reservations` directa (ej. cancelada, como el caso
+  // real "Perla Treviño" que el dueño encontró en la demo) nunca tuvo lead
+  // propio y por eso no aparecía nunca en las sugerencias. Se combina con
+  // `reservations` (ya cargada en esta página para el listado de abajo, sin
+  // consulta nueva), incluyendo canceladas/no-show/completadas a propósito
+  // -- deduplicado por correo (o teléfono si no hay correo, o nombre si no
+  // hay ninguno de los dos) para no repetir a la misma persona dos veces si
+  // ya tiene lead Y reserva.
+  const guestDirectoryMap = new Map<string, { id: string; guest_name: string; guest_email: string | null; guest_phone: string | null }>();
+  for (const l of leads) {
+    const key = (l.guest_email || l.guest_phone || l.guest_name).toLowerCase();
+    guestDirectoryMap.set(key, { id: l.id, guest_name: l.guest_name, guest_email: l.guest_email, guest_phone: l.guest_phone });
+  }
+  for (const r of reservations) {
+    const key = (r.primary_guest_email || r.primary_guest_phone || r.primary_guest_name).toLowerCase();
+    if (!guestDirectoryMap.has(key)) {
+      guestDirectoryMap.set(key, {
+        id: r.id,
+        guest_name: r.primary_guest_name,
+        guest_email: r.primary_guest_email,
+        guest_phone: r.primary_guest_phone,
+      });
+    }
+  }
+  const guestDirectory = [...guestDirectoryMap.values()];
+
+  // P1-10 (handoff de demo): "próximas" = lo único con una acción futura de
+  // verdad (confirmed); el resto es historial. Contadores por categoría para
+  // el resumen del <details> colapsado, no una segunda consulta.
+  const upcomingReservations = reservations.filter((r) => r.status === "confirmed");
+  const pastReservationsCount = reservations.filter((r) => r.status === "completed").length;
+  const cancelledReservationsCount = reservations.filter((r) => r.status === "cancelled").length;
+  const noShowReservationsCount = reservations.filter((r) => r.status === "no_show").length;
+
+  // hotel.hotelId capturado aparte: TypeScript no propaga el narrowing del
+  // "if (!hotel) return" de arriba dentro de una función anidada.
+  const currentHotelId = hotel.hotelId;
+  function renderReservationRows(list: typeof reservations) {
+    return list.map((r) => (
+      <tr key={r.id} className="border-t border-border hover:bg-border/30">
+        <td className="py-2">
+          <Link href={`/reservaciones?reservationId=${r.id}`} className="font-mono text-xs text-brand hover:underline">
+            {r.folio}
+          </Link>
+        </td>
+        <td>
+          <Link href={`/reservaciones?reservationId=${r.id}`} className="hover:underline">
+            {r.primary_guest_name}
+          </Link>
+        </td>
+        <td>
+          <ReservationStatusBadge status={r.status} />
+        </td>
+        <td>{r.reservation_stays.map((s, i) => <span key={i}>{formatDateRange(s.check_in, s.check_out)}</span>)}</td>
+        <td>
+          {r.status === "confirmed" && (
+            <form action={submitCancelReservation}>
+              <input type="hidden" name="hotelId" value={currentHotelId} />
+              <input type="hidden" name="reservationId" value={r.id} />
+              <Button variant="ghost" className="text-danger">
+                cancelar
+              </Button>
+            </form>
+          )}
+        </td>
+      </tr>
+    ));
+  }
 
   return (
     <AppShell
+      hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
+      userDisplayName={hotel.userDisplayName}
       roleName={hotel.roleName}
       current="reservaciones"
       resetHref="/reservaciones"
       brandColor={hotel.brandColor}
+      brandLogoUrl={hotel.brandLogoUrl}
+      otherHotels={hotel.otherHotels}
       features={[...features]}
     >
       <h1 className="text-xl font-bold text-foreground">Reservaciones</h1>
 
-        <div className="grid grid-cols-3 gap-4">
-          <KpiCard label="Reservas" value={reservations.length} />
-          <KpiCard label="Leads" value={leads.length} />
-          <KpiCard label="Holds activos" value={activeHolds.length} note="Esperando confirmación" />
+        {/* P1-1 (handoff de demo): sticky + cada KPI navega a su sección
+            correspondiente (ya son listas de un solo tipo cada una, así que
+            "su lista filtrada" es directamente esa sección). */}
+        <div className="sticky top-0 z-[5] -mx-6 grid grid-cols-3 gap-4 bg-background px-6 pb-3 pt-1">
+          <KpiCard label="Reservas" value={reservations.length} href="#reservas" />
+          <KpiCard label="Leads" value={leads.length} href="#leads" />
+          <KpiCard label="Holds activos" value={activeHolds.length} note="Esperando confirmación" href="#holds-activos" />
         </div>
 
         <div className="space-y-2">
@@ -256,7 +352,7 @@ export default async function ReservacionesPage({
               <p className="text-muted">{formatDate(reservationDetail.created_at)} · Reserva confirmada</p>
               {reservationDetail.payments.map((p, i) => (
                 <p key={i} className="text-muted">
-                  {formatDate(p.created_at)} · Pago registrado — ${p.amount} {p.currency} ({p.method === "card" ? "tarjeta" : "transferencia"})
+                  {formatDate(p.created_at)} · Pago registrado — ${p.amount} {p.currency} ({PAYMENT_METHOD_LABELS[p.method] ?? p.method})
                 </p>
               ))}
               {reservationDetail.status === "cancelled" && (
@@ -322,7 +418,6 @@ export default async function ReservacionesPage({
               <form action={submitConfirmReservation} className="grid grid-cols-2 gap-4">
                 <input type="hidden" name="hotelId" value={hotel.hotelId} />
                 <input type="hidden" name="holdId" value={hold.id} />
-                <input type="hidden" name="rateTotal" value={hold.quote_options?.total ?? 0} />
                 <Field label="Nombre del huésped" className="col-span-2">
                   <TextInput
                     name="primaryGuestName"
@@ -490,10 +585,26 @@ export default async function ReservacionesPage({
                             <input type="hidden" name="guestEmail" value={params.guestEmail ?? ""} />
                             <input type="hidden" name="guestPhone" value={params.guestPhone ?? ""} />
                             <Field label="Tarifa/noche" className="w-32">
-                              <TextInput name="nightlyRate" type="number" min={0} step="0.01" defaultValue={opt.baseRate} />
+                              <TextInput readOnly defaultValue={`$${opt.baseRate}`} />
                             </Field>
                             <Button>Reservar</Button>
                             <CopyQuoteButton text={quoteText} />
+                            {canDiscount && (
+                              <details className="w-full text-xs">
+                                <summary className="cursor-pointer text-brand underline">Descuento o cortesía</summary>
+                                <div className="mt-2 flex flex-wrap items-end gap-3 rounded-lg border border-border p-3">
+                                  <Field label="Nueva tarifa/noche" className="w-32">
+                                    <TextInput name="nightlyRate" type="number" min={0} step="0.01" placeholder={String(opt.baseRate)} />
+                                  </Field>
+                                  <label className="flex items-end gap-2 pb-2.5 text-muted-strong">
+                                    <input type="checkbox" name="isCourtesy" className="h-4 w-4" /> Cortesía (sin costo)
+                                  </label>
+                                  <Field label="Motivo (obligatorio si autorizas)" className="min-w-[220px] flex-1">
+                                    <TextInput name="discountReason" placeholder="Ej. cliente frecuente, compensación…" />
+                                  </Field>
+                                </div>
+                              </details>
+                            )}
                           </form>
                         </div>
                       );
@@ -507,7 +618,7 @@ export default async function ReservacionesPage({
 
         {/* Holds activos */}
         {activeHolds.length > 0 && (
-          <Card className="space-y-3">
+          <Card id="holds-activos" className="space-y-3">
             <CardTitle>Holds activos</CardTitle>
             <table className="w-full text-left">
               <thead className="text-muted">
@@ -536,55 +647,55 @@ export default async function ReservacionesPage({
           </Card>
         )}
 
-        {/* Listado de reservas */}
-        <Card className="space-y-3">
-          <CardTitle>Reservas ({reservations.length})</CardTitle>
-          <table className="w-full text-left">
-            <thead className="text-muted">
-              <tr>
-                <th className="pb-2 font-medium">Folio</th>
-                <th className="font-medium">Huésped</th>
-                <th className="font-medium">Estado</th>
-                <th className="font-medium">Fechas</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {reservations.map((r) => (
-                <tr key={r.id} className="border-t border-border hover:bg-border/30">
-                  <td className="py-2">
-                    <Link href={`/reservaciones?reservationId=${r.id}`} className="font-mono text-xs text-brand hover:underline">
-                      {r.folio}
-                    </Link>
-                  </td>
-                  <td>
-                    <Link href={`/reservaciones?reservationId=${r.id}`} className="hover:underline">
-                      {r.primary_guest_name}
-                    </Link>
-                  </td>
-                  <td>
-                    <ReservationStatusBadge status={r.status} />
-                  </td>
-                  <td>{r.reservation_stays.map((s, i) => <span key={i}>{formatDateRange(s.check_in, s.check_out)}</span>)}</td>
-                  <td>
-                    {r.status === "confirmed" && (
-                      <form action={submitCancelReservation}>
-                        <input type="hidden" name="hotelId" value={hotel.hotelId} />
-                        <input type="hidden" name="reservationId" value={r.id} />
-                        <Button variant="ghost" className="text-danger">
-                          cancelar
-                        </Button>
-                      </form>
-                    )}
-                  </td>
+        {/* Listado de reservas -- P1-10 (handoff de demo): de entrada sólo se
+            ve lo que importa día a día (próximas, status=confirmed); el
+            historial completo (pasadas/canceladas/no-show) queda colapsado
+            en un <details> al pie con totales por categoría, expandible con
+            un click -- mismo patrón <details> ya usado para "Descuento o
+            cortesía" más abajo en esta misma página, sin JS de cliente. */}
+        <Card id="reservas" className="space-y-3">
+          <CardTitle>Reservas próximas ({upcomingReservations.length})</CardTitle>
+          {upcomingReservations.length === 0 ? (
+            <p className="text-muted">Sin reservas confirmadas pendientes por llegar.</p>
+          ) : (
+            <table className="w-full text-left">
+              <thead className="text-muted">
+                <tr>
+                  <th className="pb-2 font-medium">Folio</th>
+                  <th className="font-medium">Huésped</th>
+                  <th className="font-medium">Estado</th>
+                  <th className="font-medium">Fechas</th>
+                  <th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>{renderReservationRows(upcomingReservations)}</tbody>
+            </table>
+          )}
+
+          {reservations.length > 0 && (
+            <details className="border-t border-border pt-3 text-xs">
+              <summary className="cursor-pointer text-brand underline">
+                Ver historial completo ({reservations.length}) — Pasadas: {pastReservationsCount} · Canceladas:{" "}
+                {cancelledReservationsCount} · No-show: {noShowReservationsCount}
+              </summary>
+              <table className="mt-3 w-full text-left">
+                <thead className="text-muted">
+                  <tr>
+                    <th className="pb-2 font-medium">Folio</th>
+                    <th className="font-medium">Huésped</th>
+                    <th className="font-medium">Estado</th>
+                    <th className="font-medium">Fechas</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>{renderReservationRows(reservations)}</tbody>
+              </table>
+            </details>
+          )}
         </Card>
 
         {/* Listado de leads */}
-        <Card className="space-y-3">
+        <Card id="leads" className="space-y-3">
           <CardTitle>Leads ({leads.length})</CardTitle>
           <table className="w-full text-left">
             <thead className="text-muted">

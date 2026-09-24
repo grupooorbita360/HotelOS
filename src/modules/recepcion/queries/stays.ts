@@ -42,7 +42,7 @@ export async function getStayDetails(hotelId: string, stayId: string) {
 
   const { data: activeAssignment } = await supabase
     .from("room_assignments")
-    .select("id, room_id, assigned_at, rooms(code, is_clean)")
+    .select("id, room_id, assigned_at, rooms(code, is_clean, room_type_id)")
     .eq("stay_id", stayId)
     .is("released_at", null)
     .maybeSingle();
@@ -121,11 +121,21 @@ export interface RoomAssignmentOption {
  * + de otros tipos con tarifa base mayor ("upgrade", con la diferencia ya
  * calculada x noches). No se ofrecen downgrades como recomendacion -- ver
  * CLAUDE.md, sección Recepción.
+ *
+ * soldNightlyRate: la tarifa POR NOCHE realmente vendida en esta reserva
+ * (reservation_stays.rate_total / noches), no room_types.base_rate del tipo
+ * vendido -- pueden diferir porque el staff negoció una tarifa distinta al
+ * cotizar, o porque base_rate cambió en Configuración desde que esta
+ * reserva se confirmó (auditoría de precio, Tier 1, ver CLAUDE.md). El lado
+ * "upgrade" sigue comparando contra el base_rate ACTUAL del tipo candidato:
+ * no hay tarifa histórica que congelar para una habitación que el huésped
+ * nunca reservó.
  */
 export async function listRoomAssignmentOptions(
   hotelId: string,
   soldRoomTypeId: string,
   nights: number,
+  soldNightlyRate: number,
 ): Promise<RoomAssignmentOption[]> {
   const supabase = await createClient();
 
@@ -151,14 +161,13 @@ export async function listRoomAssignmentOptions(
   const occupied = new Set((activeAssignments ?? []).map((a) => a.room_id));
 
   const roomTypeById = new Map(roomTypes.map((rt) => [rt.id, rt]));
-  const soldRate = roomTypeById.get(soldRoomTypeId)?.base_rate ?? 0;
 
   return rooms
     .filter((r) => !occupied.has(r.id))
     .map((r) => {
       const type = roomTypeById.get(r.room_type_id);
       const isEquivalente = r.room_type_id === soldRoomTypeId;
-      const diff = isEquivalente ? 0 : Math.round((((type?.base_rate ?? 0) - soldRate) * nights) * 100) / 100;
+      const diff = isEquivalente ? 0 : Math.round((((type?.base_rate ?? 0) - soldNightlyRate) * nights) * 100) / 100;
       return {
         id: r.id,
         code: r.code,
@@ -172,6 +181,77 @@ export async function listRoomAssignmentOptions(
     })
     .filter((opt) => opt.kind === "equivalente" || opt.priceDiff >= 0)
     .sort((a, b) => (a.kind === b.kind ? a.priceDiff - b.priceDiff : a.kind === "equivalente" ? -1 : 1));
+}
+
+export interface RoomChangeOption {
+  id: string;
+  code: string;
+  building: string | null;
+  bedType: string | null;
+  isClean: boolean;
+  roomTypeName: string;
+  kind: "equivalente" | "upgrade" | "downgrade";
+}
+
+/**
+ * Opciones para el cambio de habitación autorizado DESPUÉS del check-in
+ * (P0-3/P0-5, handoff de demo) -- a diferencia de listRoomAssignmentOptions()
+ * (sólo para el flujo guiado de check-in, excluye downgrades a propósito),
+ * esta sí incluye downgrades: change_room_with_authorization() (0051) los
+ * acepta con motivo + compensación opcional. La clasificación
+ * (equivalente/upgrade/downgrade) compara contra el tipo de la habitación
+ * ACTUAL de la estancia (o el tipo vendido si nunca tuvo una asignada),
+ * mismo criterio que la función SQL -- sólo para mostrar la etiqueta
+ * correcta en la UI; el servidor vuelve a decidir por su cuenta.
+ */
+export async function listRoomChangeOptions(hotelId: string, currentRoomTypeId: string): Promise<RoomChangeOption[]> {
+  const supabase = await createClient();
+
+  const { data: roomTypes, error: rtError } = await supabase
+    .from("room_types")
+    .select("id, name, base_rate")
+    .eq("hotel_id", hotelId)
+    .eq("is_active", true);
+  if (rtError) throw rtError;
+
+  const { data: rooms, error: roomsError } = await supabase
+    .from("rooms")
+    .select("id, code, building, bed_type, is_clean, room_type_id")
+    .eq("hotel_id", hotelId)
+    .eq("is_active", true);
+  if (roomsError) throw roomsError;
+
+  const { data: activeAssignments } = await supabase
+    .from("room_assignments")
+    .select("room_id")
+    .eq("hotel_id", hotelId)
+    .is("released_at", null);
+  const occupied = new Set((activeAssignments ?? []).map((a) => a.room_id));
+
+  const roomTypeById = new Map(roomTypes.map((rt) => [rt.id, rt]));
+  const currentRate = roomTypeById.get(currentRoomTypeId)?.base_rate ?? 0;
+
+  return rooms
+    .filter((r) => !occupied.has(r.id))
+    .map((r) => {
+      const type = roomTypeById.get(r.room_type_id);
+      const isEquivalente = r.room_type_id === currentRoomTypeId;
+      const kind: RoomChangeOption["kind"] = isEquivalente
+        ? "equivalente"
+        : (type?.base_rate ?? 0) > currentRate
+          ? "upgrade"
+          : "downgrade";
+      return {
+        id: r.id,
+        code: r.code,
+        building: r.building,
+        bedType: r.bed_type,
+        isClean: r.is_clean,
+        roomTypeName: type?.name ?? "—",
+        kind,
+      };
+    })
+    .sort((a, b) => (a.kind === b.kind ? a.code.localeCompare(b.code) : a.kind === "equivalente" ? -1 : a.kind === "upgrade" ? -1 : 1));
 }
 
 export async function getReceptionSettings(hotelId: string) {

@@ -20,6 +20,7 @@ export type TimelineModule =
   | "housekeeping"
   | "billing"
   | "priorities"
+  | "rooms"
   | "platform";
 
 export interface LogTimelineEventInput {

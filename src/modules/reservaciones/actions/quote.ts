@@ -15,9 +15,9 @@ export interface CreateQuoteInput {
   roomTypeId: string;
   checkIn: string;
   checkOut: string;
-  subtotal: number;
-  taxes: number;
-  total: number;
+  nightlyRateOverride?: number;
+  isCourtesy?: boolean;
+  discountReason?: string;
   channel?: string;
 }
 
@@ -25,10 +25,28 @@ export interface CreateQuoteInput {
  * Cotizar (spec S15): crea el Lead (si no existe), la Cotización y su
  * OpcionCotizada. NUNCA compromete inventario -- eso solo ocurre al aceptar
  * la opción y pedir el Hold (ver actions/hold.ts).
+ *
+ * quote_options ya no acepta INSERT directo del cliente (auditoría de
+ * precio, Tier 2, ver CLAUDE.md): create_quote_option() (0048/0052) es el
+ * único camino de escritura y calcula subtotal/taxes/total server-side a
+ * partir de room_types.base_rate + hotel_policies.iva_porcentaje.
+ *
+ * P0-7 (handoff de demo): nightlyRateOverride/isCourtesy ya no son un
+ * campo libre -- la función SQL exige has_permission(hotelId,
+ * 'reservations.discount') + discountReason no vacío en cuanto el override
+ * difiere de base_rate o se pide cortesía; sin permiso, el RPC rechaza con
+ * PERMISSION_DENIED antes de tocar nada. "Quién autorizó" es
+ * quote_options.created_by (ya auth.uid()); motivo/monto/cortesía se
+ * registran aquí en el payload del timeline, no en una columna nueva.
  */
 export async function createQuote(input: CreateQuoteInput) {
   await requirePermission(input.hotelId, "reservations.create");
   const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) throw new Error("No hay sesión activa.");
 
   const { data: lead, error: leadError } = await supabase
     .from("leads")
@@ -63,32 +81,38 @@ export async function createQuote(input: CreateQuoteInput) {
     .single();
   if (quoteError) throw quoteError;
 
-  const { data: option, error: optionError } = await supabase
-    .from("quote_options")
-    .insert({
-      hotel_id: input.hotelId,
-      quote_id: quote.id,
-      room_type_id: input.roomTypeId,
-      check_in: input.checkIn,
-      check_out: input.checkOut,
-      adults: input.paxAdults,
-      children: input.paxChildren,
-      has_pets: input.hasPets,
-      subtotal: input.subtotal,
-      taxes: input.taxes,
-      total: input.total,
-    })
-    .select("id")
-    .single();
+  const { data: option, error: optionError } = await supabase.rpc("create_quote_option", {
+    p_quote_id: quote.id,
+    p_room_type_id: input.roomTypeId,
+    p_check_in: input.checkIn,
+    p_check_out: input.checkOut,
+    p_adults: input.paxAdults,
+    p_children: input.paxChildren,
+    p_has_pets: input.hasPets,
+    p_nightly_rate_override: input.nightlyRateOverride ?? null,
+    p_is_courtesy: input.isCourtesy ?? false,
+    p_discount_reason: input.discountReason ?? null,
+  });
   if (optionError) throw optionError;
 
+  const isDiscounted = Boolean(input.isCourtesy) || Boolean(input.discountReason);
   await logTimelineEvent({
     hotelId: input.hotelId,
     module: "reservations",
-    eventType: "quote.issued",
+    eventType: isDiscounted ? "quote.discount_authorized" : "quote.issued",
     entityType: "quote",
     entityId: quote.id,
-    payload: { lead_id: lead.id, quote_option_id: option.id, total: input.total },
+    payload: {
+      lead_id: lead.id,
+      quote_option_id: option.id,
+      total: option.total,
+      ...(isDiscounted && {
+        is_courtesy: input.isCourtesy ?? false,
+        nightly_rate_override: input.nightlyRateOverride ?? null,
+        discount_reason: input.discountReason ?? null,
+        authorized_by: user.id,
+      }),
+    },
   });
 
   return { leadId: lead.id as string, quoteId: quote.id as string, quoteOptionId: option.id as string };

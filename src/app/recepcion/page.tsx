@@ -3,8 +3,8 @@ import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { getHotelFeatures } from "@/lib/auth/platform";
 import { signOut } from "@/app/login/actions";
-import { formatDateRange } from "@/lib/format";
-import { listStays, getStayDetails, listRoomAssignmentOptions, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
+import { formatDateRange, formatBalanceLabel } from "@/lib/format";
+import { listStays, getStayDetails, listRoomAssignmentOptions, listRoomChangeOptions, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -27,12 +27,20 @@ import {
   submitCreateIncident,
   submitResolveIncident,
   submitSetAsset,
+  submitChangeRoom,
 } from "./actions";
 
 export default async function RecepcionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ stayId?: string; error?: string; checkinStep?: string }>;
+  searchParams: Promise<{
+    stayId?: string;
+    error?: string;
+    checkinStep?: string;
+    roomChangeStep?: string;
+    filter?: string;
+    showCheckedOut?: string;
+  }>;
 }) {
   const params = await searchParams;
 
@@ -59,11 +67,15 @@ export default async function RecepcionPage({
   if (!features.has("module.recepcion")) {
     return (
       <AppShell
+        hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
+        userDisplayName={hotel.userDisplayName}
         roleName={hotel.roleName}
         current="recepcion"
         resetHref="/recepcion"
         brandColor={hotel.brandColor}
+        brandLogoUrl={hotel.brandLogoUrl}
+        otherHotels={hotel.otherHotels}
         features={[...features]}
       >
         <Card className="space-y-3">
@@ -76,14 +88,42 @@ export default async function RecepcionPage({
     );
   }
 
-  const stays = await listStays(hotel.hotelId);
+  const allStays = await listStays(hotel.hotelId);
   const counts = {
-    expected: stays.filter((s) => s.status === "expected").length,
-    inHouse: stays.filter((s) => s.status === "in_house").length,
-    pendingAction: stays.filter((s) => s.next_action !== "ninguna" && !["checked_out", "no_show", "walked"].includes(s.status)).length,
+    expected: allStays.filter((s) => s.status === "expected").length,
+    inHouse: allStays.filter((s) => s.status === "in_house").length,
+    pendingAction: allStays.filter((s) => s.next_action !== "ninguna" && !["checked_out", "no_show", "walked"].includes(s.status)).length,
   };
 
+  // P1-1/P1-3 (handoff de demo): las 3 KPI ahora navegan a la misma lista
+  // filtrada por estado/acción -- ?filter=expected|in_house|pending, sin
+  // valor = todas. Por defecto (sin filtro elegido) las estancias con
+  // check-out ya hecho quedan ocultas -- no perdidas, sólo no visibles de
+  // entrada -- con un link para mostrarlas (?showCheckedOut=1). Dentro de lo
+  // que queda visible, las que tienen una acción pendiente van primero.
+  const showCheckedOut = params.showCheckedOut === "1" || params.filter === "checked_out";
+  const filter = params.filter ?? "";
+  const filteredStays = allStays.filter((s) => {
+    if (!showCheckedOut && s.status === "checked_out" && filter !== "checked_out") return false;
+    if (filter === "expected") return s.status === "expected";
+    if (filter === "in_house") return s.status === "in_house";
+    if (filter === "pending") return s.next_action !== "ninguna" && !["checked_out", "no_show", "walked"].includes(s.status);
+    if (filter === "checked_out") return s.status === "checked_out";
+    return true;
+  });
+  const stays = [...filteredStays].sort((a, b) => {
+    const aPending = a.next_action !== "ninguna" && !["checked_out", "no_show", "walked"].includes(a.status) ? 0 : 1;
+    const bPending = b.next_action !== "ninguna" && !["checked_out", "no_show", "walked"].includes(b.status) ? 0 : 1;
+    return aPending - bPending;
+  });
+  const hiddenCheckedOutCount = !showCheckedOut ? allStays.filter((s) => s.status === "checked_out").length : 0;
+
   const detail = params.stayId ? await getStayDetails(hotel.hotelId, params.stayId) : null;
+
+  // Estado de cuenta -- Saldo siempre viene de stay_accounts.balance (fuente
+  // real); Hospedaje/Extras/Pagado son un desglose informativo derivado de
+  // datos ya cargados, nunca recalculan el saldo mostrado.
+  const rateTotal = Number(detail?.stay.reservation_stays?.rate_total ?? 0);
 
   const needsRoomOptions =
     !!detail &&
@@ -100,18 +140,37 @@ export default async function RecepcionPage({
           ),
         )
       : 1;
+  // La tarifa POR NOCHE realmente vendida -- no room_types.base_rate, que
+  // puede haberse editado en Configuración después de confirmar esta
+  // reserva (auditoría de precio, Tier 1, ver CLAUDE.md).
+  const soldNightlyRate = rateTotal / nights;
   const roomOptions = needsRoomOptions
-    ? await listRoomAssignmentOptions(hotel.hotelId, detail!.stay.reservation_stays!.room_type_id, nights)
+    ? await listRoomAssignmentOptions(hotel.hotelId, detail!.stay.reservation_stays!.room_type_id, nights, soldNightlyRate)
     : [];
   const equivalentOptions = roomOptions.filter((o) => o.kind === "equivalente");
   const upgradeOptions = roomOptions.filter((o) => o.kind === "upgrade");
 
+  // P0-3/P0-5 (handoff de demo): opciones para el cambio de habitación
+  // autorizado DESPUÉS del check-in -- el tipo "actual" es el de la
+  // habitación asignada si existe, o si no, el tipo vendido (mismo
+  // fallback que change_room_with_authorization(), 0051).
+  const needsRoomChangeOptions =
+    !!detail &&
+    params.roomChangeStep === "1" &&
+    (detail.stay.status === "checked_in" || detail.stay.status === "in_house");
+  const currentRoomTypeId =
+    (detail?.activeAssignment?.rooms as unknown as { room_type_id: string } | null)?.room_type_id ??
+    detail?.stay.reservation_stays?.room_type_id ??
+    "";
+  const roomChangeOptions = needsRoomChangeOptions
+    ? await listRoomChangeOptions(hotel.hotelId, currentRoomTypeId)
+    : [];
+  const equivalentChangeOptions = roomChangeOptions.filter((o) => o.kind === "equivalente");
+  const upgradeChangeOptions = roomChangeOptions.filter((o) => o.kind === "upgrade");
+  const downgradeChangeOptions = roomChangeOptions.filter((o) => o.kind === "downgrade");
+
   const checkinAssets = detail ? await getHotelCheckinAssets(hotel.hotelId) : [];
 
-  // Estado de cuenta -- Saldo siempre viene de stay_accounts.balance (fuente
-  // real); Hospedaje/Extras/Pagado son un desglose informativo derivado de
-  // datos ya cargados, nunca recalculan el saldo mostrado.
-  const rateTotal = Number(detail?.stay.reservation_stays?.rate_total ?? 0);
   const extrasCharged = detail
     ? detail.transactions.filter((t) => t.type === "charge").reduce((sum, t) => sum + Number(t.amount), 0)
     : 0;
@@ -119,22 +178,41 @@ export default async function RecepcionPage({
     ? -detail.transactions.filter((t) => t.type === "payment").reduce((sum, t) => sum + Number(t.amount), 0)
     : 0;
 
+  // P0-8 (handoff de demo): total cargos/total abonos de TODA la cuenta
+  // (no sólo "extras" como arriba) -- se derivan del signo real de cada
+  // transacción (positivo = se le suma a lo que debe, negativo = se le
+  // resta), no del tipo -- así cubre charge/refund/payment/adjustment por
+  // igual, sin tener que listar tipos a mano.
+  const totalCargos = detail
+    ? detail.transactions.filter((t) => Number(t.amount) > 0).reduce((sum, t) => sum + Number(t.amount), 0)
+    : 0;
+  const totalAbonos = detail
+    ? -detail.transactions.filter((t) => Number(t.amount) < 0).reduce((sum, t) => sum + Number(t.amount), 0)
+    : 0;
+
   return (
     <AppShell
+      hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
+      userDisplayName={hotel.userDisplayName}
       roleName={hotel.roleName}
       current="recepcion"
       resetHref="/recepcion"
       brandColor={hotel.brandColor}
+      brandLogoUrl={hotel.brandLogoUrl}
+      otherHotels={hotel.otherHotels}
       maxWidthClassName="max-w-6xl"
       features={[...features]}
     >
       <h1 className="text-xl font-bold text-foreground">Recepción</h1>
 
-        <div className="grid grid-cols-3 gap-4">
-          <KpiCard label="Llegadas esperadas" value={counts.expected} />
-          <KpiCard label="En casa" value={counts.inHouse} />
-          <KpiCard label="Con acción pendiente" value={counts.pendingAction} />
+        {/* P1-1 (handoff de demo): sticky (queda visible al hacer scroll) +
+            cada KPI navega a la lista filtrada correspondiente. El fondo
+            propio evita que la lista se transparente al pasar por debajo. */}
+        <div className="sticky top-0 z-[5] -mx-6 grid grid-cols-3 gap-4 bg-background px-6 pb-3 pt-1">
+          <KpiCard label="Llegadas esperadas" value={counts.expected} href="/recepcion?filter=expected" />
+          <KpiCard label="En casa" value={counts.inHouse} href="/recepcion?filter=in_house" />
+          <KpiCard label="Con acción pendiente" value={counts.pendingAction} href="/recepcion?filter=pending" />
         </div>
 
         {params.error && <Banner tone="danger">{params.error}</Banner>}
@@ -142,7 +220,29 @@ export default async function RecepcionPage({
         <div className="grid grid-cols-3 gap-6">
           {/* Lista de estancias */}
           <Card className="col-span-1 space-y-3">
-            <CardTitle>Estancias ({stays.length})</CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle>Estancias ({stays.length})</CardTitle>
+              {filter && (
+                <Link href="/recepcion" className="text-xs text-brand underline">
+                  Ver todas
+                </Link>
+              )}
+            </div>
+            {/* P1-3 (handoff de demo): check-out ya hecho no desaparece para
+                siempre -- sólo no se ve de entrada, con opción de mostrarlas. */}
+            {hiddenCheckedOutCount > 0 && (
+              <Link
+                href={`/recepcion?${filter ? `filter=${filter}&` : ""}showCheckedOut=1`}
+                className="block text-xs text-muted underline"
+              >
+                Mostrar {hiddenCheckedOutCount} con check-out ya hecho
+              </Link>
+            )}
+            {showCheckedOut && filter !== "checked_out" && (
+              <Link href={`/recepcion${filter ? `?filter=${filter}` : ""}`} className="block text-xs text-muted underline">
+                Ocultar check-out ya hecho
+              </Link>
+            )}
             <div className="max-h-[70vh] space-y-2 overflow-auto">
               {stays.map((s) => {
                 const rs = s.reservation_stays!;
@@ -164,7 +264,7 @@ export default async function RecepcionPage({
                     </p>
                     <p className="text-xs font-medium text-brand">{nextActionLabel(s.next_action)}</p>
                     {(s.stay_accounts?.balance ?? 0) > 0 && (
-                      <p className="text-xs text-danger">Saldo: ${s.stay_accounts?.balance}</p>
+                      <p className="text-xs text-danger">{formatBalanceLabel(s.stay_accounts?.balance ?? 0)}</p>
                     )}
                   </Link>
                 );
@@ -202,6 +302,18 @@ export default async function RecepcionPage({
                   <p>
                     Próxima acción: <strong className="text-brand">{nextActionLabel(detail.stay.next_action)}</strong>
                   </p>
+                  {/* P1-5 (handoff de demo): "Sin acción pendiente" cubre dos
+                      situaciones distintas (huésped en casa con cuenta al
+                      corriente vs. estancia ya cerrada) -- se aclara cuál es
+                      cuál en vez de renombrar el estado (el badge de arriba
+                      ya distingue el status real). */}
+                  {detail.stay.next_action === "ninguna" && (
+                    <p className="text-xs text-muted">
+                      {detail.stay.status === "in_house"
+                        ? "El huésped ya está en casa, con habitación y cuenta al corriente — nada que hacer hasta su check-out."
+                        : "Esta estancia ya terminó su ciclo — no aplica ninguna acción adicional."}
+                    </p>
+                  )}
 
                   <div className="flex flex-wrap gap-2 pt-2">
                     {detail.stay.status === "expected" && (
@@ -244,6 +356,13 @@ export default async function RecepcionPage({
                         <Button>Hacer check-out</Button>
                       </form>
                     )}
+                    {/* P0-5 (handoff de demo): "Cambio de habitación" sólo para una
+                        estancia activa que ya tiene check-in -- nunca antes. */}
+                    {(detail.stay.status === "checked_in" || detail.stay.status === "in_house") && (
+                      <Link href={`/recepcion?stayId=${detail.stay.id}&roomChangeStep=1`}>
+                        <Button variant="secondary">Cambio de habitación</Button>
+                      </Link>
+                    )}
                   </div>
                 </Card>
 
@@ -273,7 +392,7 @@ export default async function RecepcionPage({
                           <div>
                             <p className="text-xs uppercase text-muted">Saldo</p>
                             <p className={`font-semibold ${(detail.stay.stay_accounts?.balance ?? 0) > 0 ? "text-danger" : "text-brand"}`}>
-                              ${detail.stay.stay_accounts?.balance ?? 0}
+                              {formatBalanceLabel(detail.stay.stay_accounts?.balance ?? 0)}
                             </p>
                           </div>
                         </div>
@@ -394,15 +513,97 @@ export default async function RecepcionPage({
                   </Card>
                 )}
 
+                {/* Cambio de habitación autorizado (P0-3/P0-5, handoff de demo):
+                    a diferencia de "Asignar habitación" (arriba, sólo para el
+                    caso raro de checked_in sin habitación), este SÍ permite
+                    upgrade/downgrade de una estancia que ya tiene una asignada. */}
+                {needsRoomChangeOptions && (
+                  <Card className="space-y-3">
+                    <CardTitle>Cambio de habitación</CardTitle>
+                    {roomChangeOptions.length === 0 ? (
+                      <Banner tone="warning">No hay otras habitaciones libres ahora mismo.</Banner>
+                    ) : (
+                      <form action={submitChangeRoom} className="space-y-3">
+                        <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                        <input type="hidden" name="stayId" value={detail!.stay.id} />
+                        <Field label="Nueva habitación">
+                          <Select name="roomId" required>
+                            {equivalentChangeOptions.length > 0 && (
+                              <optgroup label="Equivalente (mismo tipo, sin costo)">
+                                {equivalentChangeOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} · {o.roomTypeName}
+                                    {o.isClean ? "" : " (sucia)"}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {upgradeChangeOptions.length > 0 && (
+                              <optgroup label="Upgrade">
+                                {upgradeChangeOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} · {o.roomTypeName}
+                                    {o.isClean ? "" : " (sucia)"}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {downgradeChangeOptions.length > 0 && (
+                              <optgroup label="Downgrade">
+                                {downgradeChangeOptions.map((o) => (
+                                  <option key={o.id} value={o.id}>
+                                    {o.code} · {o.roomTypeName}
+                                    {o.isClean ? "" : " (sucia)"}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                          </Select>
+                        </Field>
+                        <Field label="Motivo (obligatorio para upgrade/downgrade)">
+                          <TextInput name="reason" placeholder="Ej. solicitud del huésped, falla en la habitación…" />
+                        </Field>
+                        <div className="grid grid-cols-3 gap-3">
+                          <label className="flex items-end gap-2 pb-2 text-muted-strong">
+                            <input type="checkbox" name="isCourtesy" className="h-4 w-4" /> Upgrade de cortesía (sin cobro)
+                          </label>
+                          <Field label="Cobro de upgrade (si no es cortesía)">
+                            <TextInput name="chargeAmount" type="number" min={0} step="0.01" />
+                          </Field>
+                          <Field label="Compensación por downgrade (opcional)">
+                            <TextInput name="compensationAmount" type="number" min={0} step="0.01" />
+                          </Field>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Button>Confirmar cambio de habitación</Button>
+                          <Link href={`/recepcion?stayId=${detail!.stay.id}`} className="text-muted underline">
+                            Cancelar
+                          </Link>
+                        </div>
+                      </form>
+                    )}
+                  </Card>
+                )}
+
                 {/* Cuenta de la estancia */}
                 <Card className="space-y-3">
                   <div className="flex items-center justify-between">
                     <CardTitle>Cuenta de la estancia</CardTitle>
-                    <b className={detail.stay.reservation_stays ? "" : ""}>
-                      Saldo: <span className={detail.stay.stay_accounts && detail.stay.stay_accounts.balance > 0 ? "text-danger" : "text-brand"}>
-                        ${detail.stay.stay_accounts?.balance ?? 0}
-                      </span>
+                    {/* P0-8 (handoff de demo): nunca un número negativo crudo --
+                        "A favor"/"Por pagar"/"Cuenta liquidada" en lenguaje simple. */}
+                    <b className={(detail.stay.stay_accounts?.balance ?? 0) > 0 ? "text-danger" : "text-brand"}>
+                      {formatBalanceLabel(detail.stay.stay_accounts?.balance ?? 0)}
                     </b>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <p className="uppercase text-muted">Total cargos</p>
+                      <p className="font-semibold text-foreground">${totalCargos.toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <p className="uppercase text-muted">Total abonos/depósitos</p>
+                      <p className="font-semibold text-foreground">${totalAbonos.toFixed(2)}</p>
+                    </div>
                   </div>
 
                   {detail.stay.stay_accounts?.status === "open" && (
@@ -474,11 +675,13 @@ export default async function RecepcionPage({
                   <Banner tone="warning">{`Falta para poder cerrar: ${detail.readiness.blockers.join(" · ")}`}</Banner>
                 )}
 
-                {/* Activos entregados */}
+                {/* Activos entregados -- P1-6 (handoff de demo): si el hotel
+                    no tiene activos configurados, la sección completa se
+                    oculta -- nunca un mensaje de "no hay nada aquí". */}
+                {checkinAssets.length > 0 && (
                 <Card className="space-y-3">
                   <CardTitle>Activos entregados</CardTitle>
                   <div className="space-y-2">
-                    {checkinAssets.length === 0 && <p className="text-muted">Este hotel no tiene activos configurados en su política de check-in.</p>}
                     {checkinAssets.map((assetName) => {
                       const existing = detail.assets.find((a) => a.asset_name === assetName);
                       return (
@@ -501,6 +704,7 @@ export default async function RecepcionPage({
                     })}
                   </div>
                 </Card>
+                )}
 
                 {/* Solicitudes e incidencias */}
                 <div className="grid grid-cols-2 gap-4">

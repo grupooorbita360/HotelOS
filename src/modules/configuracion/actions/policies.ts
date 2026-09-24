@@ -117,3 +117,47 @@ export async function updateBrandColor(hotelId: string, hexColor: string | null)
     payload: { brand_color: hexColor },
   });
 }
+
+/**
+ * Logo del hotel (P1-2, handoff de demo) -- mismo patrón exacto que
+ * updateBrandColor(): una URL en hotel_policies.extra_settings.logo_url, no
+ * una columna nueva. Deliberadamente por URL, no por archivo: este proyecto
+ * no tiene todavía un flujo de subida a Supabase Storage (Storage está en el
+ * stack pero sin usar aún) -- construirlo sólo para esto sería una tarea de
+ * infraestructura nueva, fuera del alcance "UI/UX de bajo riesgo" de esta
+ * ronda. Un hotel sin logo (URL vacía) simplemente no muestra ninguno en
+ * AppShell -- nunca un ícono roto.
+ */
+export async function updateBrandLogo(hotelId: string, logoUrl: string | null) {
+  await requirePermission(hotelId, "hotel.settings.manage");
+  if (logoUrl && !/^https?:\/\//i.test(logoUrl)) {
+    throw new Error("La URL del logo debe empezar con http:// o https://.");
+  }
+
+  const supabase = await createClient();
+  const { data: current, error: currentError } = await supabase
+    .from("hotel_policies")
+    .select("extra_settings")
+    .eq("hotel_id", hotelId)
+    .single();
+  if (currentError) throw currentError;
+
+  const nextSettings: Record<string, Json> = { ...((current.extra_settings as Record<string, Json>) ?? {}) };
+  if (logoUrl) nextSettings.logo_url = logoUrl;
+  else delete nextSettings.logo_url;
+
+  const { error } = await supabase
+    .from("hotel_policies")
+    .update({ extra_settings: nextSettings })
+    .eq("hotel_id", hotelId);
+  if (error) throw error;
+
+  await logTimelineEvent({
+    hotelId,
+    module: "core",
+    eventType: "hotel_policies.updated",
+    entityType: "hotel_policies",
+    entityId: hotelId,
+    payload: { logo_url: logoUrl },
+  });
+}
