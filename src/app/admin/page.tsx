@@ -134,7 +134,8 @@ export default async function AdminPage({
   const catalogEnabled = (featureKey: string, plan: string) =>
     catalog.find((c) => c.feature_key === featureKey && c.plan === plan)?.enabled ?? false;
 
-  const demoHotel = hotels.find((h) => h.slug === "hotel-demo");
+     // Fuente de verdad del demo: hotels.is_demo (0055), no el slug.
+  const demoHotel = hotels.find((h) => h.is_demo);
 
   return (
     <div className="min-h-screen bg-background px-6 py-8">
@@ -231,18 +232,21 @@ export default async function AdminPage({
                       const status = STATUS_BADGE[h.status] ?? { label: h.status, tone: "neutral" as const };
                       return (
                         <tr key={h.id} className="border-b border-border">
-                          <td className="py-2 pr-3 font-medium">{h.name}</td>
-                          <td className="py-2 pr-3">
-                            {h.owners.length > 0 ? (
-                              <span>
-                                {h.owners[0].email}
-                                {h.owners.length > 1 && (
-                                  <span className="text-muted"> +{h.owners.length - 1}</span>
-                                )}
-                              </span>
-                            ) : (
-                              <span className="text-muted">sin dueño</span>
-                            )}
+                <td className="py-2 pr-3 font-medium">
+                  {h.name}
+                  {h.is_demo && <span className="ml-2 text-muted">(demo)</span>}
+                </td>
+                <td className="py-2 pr-3">
+                  {h.owners.length > 0 ? (
+                    <span>
+                      {h.owners[0].email}
+                      {h.owners.length > 1 && (
+                        <span className="text-muted"> +{h.owners.length - 1}</span>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-muted">sin dueño</span>
+                  )}
                           </td>
                           <td className="py-2 pr-3">{planLabel(h.plan)}</td>
                           <td className="py-2 pr-3"><Badge tone={status.tone}>{status.label}</Badge></td>
@@ -498,12 +502,13 @@ export default async function AdminPage({
           <Card className="space-y-4">
             <CardTitle>Hotel Demo</CardTitle>
             <p className="text-xs text-muted">
-              La demo vive dentro de este proyecto como el hotel <code>hotel-demo</code>: mismo código, misma base
-              de datos, aislamiento garantizado por la RLS multi-tenant que ya existe. El botón borra todo el dato
-              operativo de ese hotel y lo regenera con ~7 semanas de historial anclado a la fecha actual:
-              estancias cerradas (ocupación, ADR, ingresos por día/semana), un no-show, cancelaciones, 3 estancias
-              en casa con saldos parciales, llegadas futuras, solicitudes, incidencias y timeline real para los
-              KPIs. No toca a otros hoteles ni las membresías: la cuenta demo sigue funcionando después.
+              La demo vive dentro de este proyecto como el hotel marcado con <code>is_demo</code> (hoy el de slug{" "}
+              <code>hotel-demo</code>): mismo código, misma base de datos, aislamiento garantizado por la RLS
+              multi-tenant que ya existe. El botón borra todo el dato operativo de ese hotel y lo regenera con ~7
+              semanas de historial anclado a la fecha actual: estancias cerradas (ocupación, ADR, ingresos por
+              día/semana), un no-show, cancelaciones, 3 estancias en casa con saldos parciales, llegadas futuras,
+              solicitudes, incidencias y timeline real para los KPIs. No toca a otros hoteles ni las membresías: la
+              cuenta demo sigue funcionando después.
             </p>
 
             {demoHotel ? (
@@ -519,7 +524,7 @@ export default async function AdminPage({
               </div>
             ) : (
               <p className="text-xs text-muted">
-                El hotel <code>hotel-demo</code> aún no existe: el primer reinicio lo crea automáticamente (plan
+                Aún no existe un hotel con <code>is_demo</code>: el primer reinicio lo crea automáticamente (plan
                 Pro, sin límites, status activo).
               </p>
             )}
