@@ -2238,6 +2238,76 @@ cascada encontradas (`reservations.lead_id`/`.quote_id`/`.hold_id`) son en
 sentido contrario (reservations es la fila hija ahí, ya se borra primero
 en el wipe), así que no bloquean nada.
 
+## Resolución del hotel actual: por qué no era cosmético
+
+Encontrado probando la ronda P0 en vivo, con una cuenta con dos
+membresías activas (`demo@hotelos.test`, dueño de dos hoteles demo):
+`getCurrentUserHotel()` (`src/lib/auth/session.ts`) resolvía "el hotel
+actual" con `.from("user_hotel_roles")...limit(1).maybeSingle()` **sin
+`order by`** -- sin garantía de orden, la misma sesión podía resolver a
+un hotel distinto entre requests. Se manifestó como `PGRST116` (0 filas)
+al pedir una estancia real bajo el `hotel_id` equivocado. El mismo patrón
+existía en `homeForCurrentUser()` (`src/app/login/actions.ts`), decidiendo
+a qué módulo aterriza un usuario justo después de iniciar sesión.
+
+No se trató como un caso raro a ignorar: HotelOS es multi-hotel por
+diseño (un dueño puede administrar más de un hotel, ver Plataforma/`/admin`
+más arriba) -- resolver "el primero" en silencio, sin forma de elegir,
+era un hueco de producto real, no sólo un bug técnico. Se corrigió en dos
+capas:
+
+1. **Orden determinista (mínimo viable).** `listActiveHotelMemberships()`
+   (nueva, `session.ts`) ordena `user_hotel_roles` por `created_at asc` --
+   la membresía más antigua es el hotel "de siempre" para quien nunca ha
+   elegido. `homeForCurrentUser()` gana el mismo `order by` sobre su
+   propia consulta (no se unificó con la función anterior: su proyección y
+   necesidad -- sólo el primer hotel y su `status` -- son distintas, y
+   duplicar un `order by` de una línea no es la duplicación que la regla 6
+   busca evitar).
+2. **Selector explícito de hotel**, porque un mínimo viable silencioso
+   seguía sin resolver el caso real (elegir CUÁL hotel operar, no sólo que
+   la elección por defecto sea estable). Cookie `selected_hotel_id`
+   (httpOnly, 1 año), fijada únicamente por `selectHotel()`
+   (`src/lib/auth/actions.ts`, Server Action nueva) -- que **siempre**
+   revalida contra `user_hotel_roles` que ese `hotel_id` es una membresía
+   activa real de ese usuario antes de fijar la cookie (regla 2: nunca
+   confiar en un hotel_id que venga del cliente sin validar en servidor;
+   un valor ajeno o inactivo se ignora en silencio, la sesión se queda en
+   el hotel que ya tenía). `getCurrentUserHotel()` usa la cookie si sigue
+   siendo válida; si no hay cookie o ya no aplica, cae al orden
+   determinista de (1). `AppShell` (`src/components/ui/AppShell.tsx`) sólo
+   muestra el selector (un `<select>` + botón "Ir", sin JS de cliente,
+   mismo patrón de formulario plano del resto del proyecto) cuando
+   `otherHotels` trae algo -- un usuario de un solo hotel no ve nada nuevo.
+
+`getCurrentUserHotel()` devuelve ahora también `otherHotels` (las demás
+membresías activas, para pintar el selector) -- las 5 páginas de módulo
+(`reservaciones`/`recepcion`/`rack`/`configuracion`/`caja`) pasan
+`hotelId`/`otherHotels` nuevos a `AppShell` en sus 10 usos (2 por página:
+la variante "módulo no incluido en el plan" y la principal).
+
+**Bug real encontrado validando el selector en vivo:** el primer cambio de
+hotel fijaba la cookie correctamente (confirmado leyendo la cookie real
+del navegador) pero el render inmediatamente después seguía mostrando el
+hotel anterior -- sólo una recarga dura o una navegación fresca mostraban
+el valor correcto. `revalidatePath("/", "layout")` en `selectHotel()` no
+bastaba por sí solo: invalida el lado del servidor, pero el Client Router
+Cache del navegador podía reusar el RSC ya prefetcheado con la cookie
+vieja cuando el destino (`returnTo`) era la URL EXACTA de la que se
+partió -- mismo síntoma, causa distinta, que el bug ya documentado en
+Configuración ("ningún `redirect()` de vuelta a la URL de origen es
+seguro sin invalidar la entrada de caché de esa URL exacta"). Corregido
+agregando un parámetro que cambia en cada cambio de hotel
+(`?hotelSwitchedAt=<timestamp>`) al `returnTo` antes de redirigir -- fuerza
+al navegador a tratarlo como una URL distinta y pedir el render fresco,
+mismo principio que `?reservationId=`/`?checkinStep=` ya usan en otros
+flujos para lo mismo. Validado en vivo con una cuenta real de dos
+membresías: resolución sin cookie estable en 3 llamadas repetidas (siempre
+la membresía más antigua); cambiar de hotel y volver a cargar la misma
+página 3 veces seguidas siempre refleja el hotel elegido; cambiar de
+regreso al otro hotel también refleja de inmediato, sin flash del valor
+anterior.
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
