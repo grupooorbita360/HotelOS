@@ -28,6 +28,7 @@ export interface Database {
           timezone: string;
           country: string | null;
           moneda_base: string;
+          is_demo: boolean;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -42,6 +43,7 @@ export interface Database {
           timezone?: string;
           country?: string | null;
           moneda_base?: string;
+          is_demo?: boolean;
         };
         Update: Partial<Database["public"]["Tables"]["hotels"]["Insert"]>;
         Relationships: [];
