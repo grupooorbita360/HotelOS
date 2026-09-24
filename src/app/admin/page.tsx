@@ -134,7 +134,7 @@ export default async function AdminPage({
   const catalogEnabled = (featureKey: string, plan: string) =>
     catalog.find((c) => c.feature_key === featureKey && c.plan === plan)?.enabled ?? false;
 
-  // Fuente de verdad del demo: hotels.is_demo (0051), no el slug.
+     // Fuente de verdad del demo: hotels.is_demo (0055), no el slug.
   const demoHotel = hotels.find((h) => h.is_demo);
 
   return (
