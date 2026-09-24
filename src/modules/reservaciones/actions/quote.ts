@@ -48,25 +48,69 @@ export async function createQuote(input: CreateQuoteInput) {
   } = await supabase.auth.getUser();
   if (!user) throw new Error("No hay sesión activa.");
 
-  const { data: lead, error: leadError } = await supabase
+  // Reutiliza el Lead existente del mismo huésped (mismo criterio de
+  // dedupe que el directorio de sugerencias de la UI, P1-9: correo, si no
+  // hay, teléfono, si no hay, nombre) en vez de insertar uno nuevo en cada
+  // cotización -- encontrado real al investigar un reporte de "el lead se
+  // creó pero la reserva no": sin esto, CUALQUIER reintento después de un
+  // error a mitad de camino (el que sea) duplica el Lead del mismo huésped
+  // cada vez que se vuelve a intentar. Sólo se reutiliza un Lead en un
+  // status todavía abierto (new/contacted/quoted/negotiating/waitlisted) --
+  // uno ya converted/lost es una intención de compra cerrada, no se reabre
+  // en silencio con un intento nuevo.
+  const guestKey = (input.guestEmail || input.guestPhone || input.guestName).trim().toLowerCase();
+  const { data: openLeads, error: openLeadsError } = await supabase
     .from("leads")
-    .insert({
-      hotel_id: input.hotelId,
-      guest_name: input.guestName,
-      guest_email: input.guestEmail || null,
-      guest_phone: input.guestPhone || null,
-      pax_adults: input.paxAdults,
-      pax_children: input.paxChildren,
-      has_pets: input.hasPets,
-      desired_check_in: input.checkIn,
-      desired_check_out: input.checkOut,
-      desired_room_type_id: input.roomTypeId,
-      channel: input.channel ?? "direct",
-      status: "quoted",
-    })
-    .select("id")
-    .single();
-  if (leadError) throw leadError;
+    .select("id, guest_name, guest_email, guest_phone")
+    .eq("hotel_id", input.hotelId)
+    .in("status", ["new", "contacted", "quoted", "negotiating", "waitlisted"]);
+  if (openLeadsError) throw openLeadsError;
+
+  const reusableLead = openLeads?.find(
+    (l) => (l.guest_email || l.guest_phone || l.guest_name).trim().toLowerCase() === guestKey,
+  );
+
+  let leadId: string;
+  if (reusableLead) {
+    const { error: updateLeadError } = await supabase
+      .from("leads")
+      .update({
+        guest_name: input.guestName,
+        guest_email: input.guestEmail || null,
+        guest_phone: input.guestPhone || null,
+        pax_adults: input.paxAdults,
+        pax_children: input.paxChildren,
+        has_pets: input.hasPets,
+        desired_check_in: input.checkIn,
+        desired_check_out: input.checkOut,
+        desired_room_type_id: input.roomTypeId,
+        status: "quoted",
+      })
+      .eq("id", reusableLead.id);
+    if (updateLeadError) throw updateLeadError;
+    leadId = reusableLead.id;
+  } else {
+    const { data: lead, error: leadError } = await supabase
+      .from("leads")
+      .insert({
+        hotel_id: input.hotelId,
+        guest_name: input.guestName,
+        guest_email: input.guestEmail || null,
+        guest_phone: input.guestPhone || null,
+        pax_adults: input.paxAdults,
+        pax_children: input.paxChildren,
+        has_pets: input.hasPets,
+        desired_check_in: input.checkIn,
+        desired_check_out: input.checkOut,
+        desired_room_type_id: input.roomTypeId,
+        channel: input.channel ?? "direct",
+        status: "quoted",
+      })
+      .select("id")
+      .single();
+    if (leadError) throw leadError;
+    leadId = lead.id;
+  }
 
   const priceValidUntil = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 
@@ -74,7 +118,7 @@ export async function createQuote(input: CreateQuoteInput) {
     .from("quotes")
     .insert({
       hotel_id: input.hotelId,
-      lead_id: lead.id,
+      lead_id: leadId,
       price_valid_until: priceValidUntil,
     })
     .select("id")
@@ -103,7 +147,7 @@ export async function createQuote(input: CreateQuoteInput) {
     entityType: "quote",
     entityId: quote.id,
     payload: {
-      lead_id: lead.id,
+      lead_id: leadId,
       quote_option_id: option.id,
       total: option.total,
       ...(isDiscounted && {
@@ -115,5 +159,5 @@ export async function createQuote(input: CreateQuoteInput) {
     },
   });
 
-  return { leadId: lead.id as string, quoteId: quote.id as string, quoteOptionId: option.id as string };
+  return { leadId, quoteId: quote.id as string, quoteOptionId: option.id as string };
 }

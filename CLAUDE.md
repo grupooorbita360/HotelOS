@@ -2481,6 +2481,65 @@ de dejar el botón sin contexto -- decidir si el check-out debería marcar
 sucia automáticamente queda para cuando se revise el flujo de checkout a
 propósito (P1/P2 futuro con lógica de negocio, no esta ronda).
 
+## Bug real: cotizar podía duplicar el Lead de un huésped en cada reintento
+
+Reporte real contra Hotel Demo: buscar Sencilla para "Luciana Torres" (23-27
+sep 2026, 1 adulto, tarifa de lista) y pulsar "Reservar" mostró "A server
+error occurred" -- el Lead quedó creado como "Cotizado" pero sin
+`quote_options` ni Hold ni Reserva (46 reservas sin cambio, 0 Holds
+activos).
+
+**Diagnóstico:** se reprodujeron los mismos parámetros exactos (mismo tipo,
+mismas fechas, mismo adulto, misma tarifa) tanto llamando `create_quote_option()`
+directo por REST como recorriendo el flujo completo en vivo contra Hotel
+Demo -- en ambos casos, sin error. La causa exacta del 500 original no se
+pudo reproducir de forma determinista (probable condición transitoria de
+red/conexión en el momento de esa llamada específica, no un defecto de
+lógica reproducible). Pero investigar el código de `createQuote()`
+(`src/modules/reservaciones/actions/quote.ts`) para descartar esa causa
+expuso un bug real, independiente y siempre reproducible: la función hace
+un `insert` incondicional en `leads` **en cada llamada**, sin buscar si el
+mismo huésped ya tiene un Lead abierto. Esto significa que **cualquier
+reintento después de cualquier error a mitad de camino** (el 500 original,
+o cualquier otro) duplica el Lead del mismo huésped -- exactamente el
+riesgo que el reporte pedía evitar explícitamente ("completar el flujo sin
+duplicar el lead existente").
+
+**Corrección:** `createQuote()` ahora busca, antes de insertar, un Lead
+existente del mismo hotel cuyo huésped coincida (mismo criterio de dedupe
+que el directorio de sugerencias de la UI, P1-9: correo si hay, si no
+teléfono, si no nombre, comparación case-insensitive) y cuyo `status` siga
+abierto (`new`/`contacted`/`quoted`/`negotiating`/`waitlisted`). Si existe,
+se actualiza ese mismo Lead (fechas/tipo/pax/status más recientes) en vez
+de insertar uno nuevo -- mismo `id`, se conserva su historial. Un Lead ya
+`converted`/`lost` es una intención de compra cerrada y **no** se reutiliza
+en silencio: una cotización nueva para ese huésped crea un Lead nuevo,
+igual que antes. No hizo falta migración: `leads` ya no tenía política de
+`UPDATE` distinta de `INSERT` (misma policy `for all` desde 0011), así que
+el `has_permission()` que ya se exigía cubre ambos caminos por igual.
+
+Efecto colateral encontrado al escribir el fix: `leads.Update` (tipo
+generado, `src/types/database.types.ts`) es `Partial<Insert>`, y el
+`Insert` generado para esta tabla nunca incluyó `last_interaction_at` (una
+columna con default `now()` pensada sólo para lecturas de CRM) -- intentar
+fijarla a mano en el `.update()` rompía el build (`Type 'string' is not
+assignable to type 'never'`, el error típico de TypeScript para una
+propiedad fuera del tipo objetivo). No se regeneraron los tipos sólo por
+esto (no hubo cambio de esquema): se quitó ese campo del `.update()`, ya
+que no era necesario para la corrección real (el Lead reusado ya refleja
+la fecha del intento más reciente en `updated_at`, que sí llena el trigger
+genérico).
+
+**Validado en vivo contra Hotel Demo real** (no sólo local): se reprodujo
+el flujo completo (Sencilla, 23-27 sep 2026, 1 adulto, tarifa de lista,
+huésped "Luciana Torres") de punta a punta con el fix aplicado --
+Cotización → Hold → Reserva confirmada (folio `260924-401CB`), sin ningún
+error 500 en el camino. Se confirmó contra la base real, antes y después,
+que el Lead de Luciana Torres (`c682c425-...`) es el **mismo** antes y
+después -- nunca se creó un segundo Lead -- y que terminó con
+`status = 'converted'` y `reservation_id` apuntando a la reserva nueva,
+exactamente el ciclo de vida esperado de un Lead que se convierte.
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
