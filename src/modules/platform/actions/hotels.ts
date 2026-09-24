@@ -429,7 +429,8 @@ export interface ResetDemoResult {
 }
 
 /**
- * Regenera el Hotel Demo (slug 'hotel-demo') con ~7 semanas de historial.
+ * Regenera el Hotel Demo (hotels.is_demo = true; el slug 'hotel-demo' queda
+ * sólo como identificador legible, ver 0051) con ~7 semanas de historial.
  *
  * El borrado + seed corre dentro de la función reset_demo_hotel() (0050):
  * atómico, idempotente y con guard de platform_admin a nivel de base
