@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { Badge } from "@/components/ui/Badge";
 import { AppShell } from "@/components/ui/AppShell";
+import { Modal } from "@/components/ui/Modal";
 import {
   submitCreateRoomType,
   submitUpdateRoomType,
@@ -25,6 +26,7 @@ import {
   submitUpdateHotelPolicies,
   submitUpdateReceptionSettings,
   submitUpdateBrandColor,
+  submitUpdateBrandLogo,
   submitAddStaffMember,
   submitChangeStaffRole,
   submitSetStaffActive,
@@ -80,10 +82,12 @@ export default async function ConfiguracionPage({
       <AppShell
         hotelId={hotel.hotelId}
         hotelName={hotel.hotelName}
+        userDisplayName={hotel.userDisplayName}
         roleName={hotel.roleName}
         current="configuracion"
         resetHref="/configuracion"
         brandColor={hotel.brandColor}
+        brandLogoUrl={hotel.brandLogoUrl}
         otherHotels={hotel.otherHotels}
         features={[...features]}
       >
@@ -154,10 +158,12 @@ export default async function ConfiguracionPage({
     <AppShell
       hotelId={hotel.hotelId}
       hotelName={hotel.hotelName}
+      userDisplayName={hotel.userDisplayName}
       roleName={hotel.roleName}
       current="configuracion"
       resetHref="/configuracion"
       brandColor={hotel.brandColor}
+      brandLogoUrl={hotel.brandLogoUrl}
       otherHotels={hotel.otherHotels}
       features={[...features]}
     >
@@ -202,7 +208,10 @@ export default async function ConfiguracionPage({
                       {rt.accepts_pets ? "acepta mascotas" : "sin mascotas"} · tarifa base ${rt.base_rate}
                     </p>
                     <div className="mt-2 flex gap-3">
-                      <Link href={`/configuracion?tab=habitaciones&editRoomTypeId=${rt.id}`} className="text-brand underline">
+                      {/* P1-11 (handoff de demo): scroll={false} -- el Link de
+                          Next.js por default sube el scroll al abrir el popup,
+                          justo lo que este punto pidió evitar. */}
+                      <Link href={`/configuracion?tab=habitaciones&editRoomTypeId=${rt.id}`} scroll={false} className="text-brand underline">
                         Editar
                       </Link>
                       <form action={submitSetRoomTypeActive}>
@@ -217,13 +226,45 @@ export default async function ConfiguracionPage({
                 {roomTypes.length === 0 && <p className="text-muted">Sin tipos de habitación todavía.</p>}
               </div>
 
-              <form
-                action={editingRoomType ? submitUpdateRoomType : submitCreateRoomType}
-                className="space-y-3 border-t border-border pt-4"
-              >
+              <form action={submitCreateRoomType} className="space-y-3 border-t border-border pt-4">
                 <input type="hidden" name="hotelId" value={hotel.hotelId} />
-                {editingRoomType && <input type="hidden" name="roomTypeId" value={editingRoomType.id} />}
-                <p className="font-semibold">{editingRoomType ? `Editando "${editingRoomType.name}"` : "Nuevo tipo de habitación"}</p>
+                <p className="font-semibold">Nuevo tipo de habitación</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Nombre">
+                    <TextInput name="name" required />
+                  </Field>
+                  <Field label="Código">
+                    <TextInput name="code" required />
+                  </Field>
+                  <Field label="Capacidad adultos">
+                    <TextInput name="capacityAdults" type="number" min={1} defaultValue={2} />
+                  </Field>
+                  <Field label="Capacidad niños">
+                    <TextInput name="capacityChildren" type="number" min={0} defaultValue={0} />
+                  </Field>
+                  <Field label="Tarifa base">
+                    <TextInput name="baseRate" type="number" min={0} step="0.01" defaultValue={0} />
+                  </Field>
+                  <label className="flex items-center gap-2 self-end pb-2.5 text-muted-strong">
+                    <input type="checkbox" name="acceptsPets" className="h-4 w-4" /> Acepta mascotas
+                  </label>
+                </div>
+                <Button>Crear tipo</Button>
+              </form>
+            </Card>
+
+            {/* P1-11 (handoff de demo): editar ya no salta al formulario del
+                final de la lista -- abre en un popup sobre la misma posición
+                de scroll. El popup existe siempre en el DOM; sólo se abre
+                cuando editingRoomType trae algo (?editRoomTypeId=). */}
+            <Modal
+              open={!!editingRoomType}
+              title={editingRoomType ? `Editando "${editingRoomType.name}"` : "Editar tipo de habitación"}
+              closeHref="/configuracion?tab=habitaciones"
+            >
+              <form action={submitUpdateRoomType} className="space-y-3">
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <input type="hidden" name="roomTypeId" value={editingRoomType?.id} />
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Nombre">
                     <TextInput name="name" required defaultValue={editingRoomType?.name} />
@@ -246,21 +287,31 @@ export default async function ConfiguracionPage({
                   </label>
                 </div>
                 <div className="flex gap-2">
-                  <Button>{editingRoomType ? "Guardar cambios" : "Crear tipo"}</Button>
-                  {editingRoomType && (
-                    <Link href="/configuracion?tab=habitaciones">
-                      <Button variant="ghost" type="button">
-                        Cancelar
-                      </Button>
-                    </Link>
-                  )}
+                  <Button>Guardar cambios</Button>
+                  <Link href="/configuracion?tab=habitaciones" scroll={false}>
+                    <Button variant="ghost" type="button">
+                      Cancelar
+                    </Button>
+                  </Link>
                 </div>
               </form>
-            </Card>
+            </Modal>
 
             <Card className="space-y-4">
               <CardTitle>Habitaciones físicas ({rooms.length})</CardTitle>
               <p className="text-muted">Unidad real: número, zona/edificio y tipo de cama. Pertenece a un tipo de arriba.</p>
+              {/* P1-13 (handoff de demo): confirmado que "Marcar sucia" sí tiene
+                  un flujo real detrás (gate de check_in() si la política del
+                  hotel no permite check-in con habitación sucia, más el aviso
+                  "(sucia)" al asignar/cambiar habitación en Recepción) -- no
+                  se quitó. Se aclara aquí porque el check-out NO marca sucia
+                  la habitación automáticamente todavía (Housekeeping no
+                  existe): alguien del hotel tiene que marcarla a mano. */}
+              <p className="text-xs text-muted">
+                Limpia/Sucia es el puente temporal hasta que exista Housekeeping: el check-out no marca sucia una
+                habitación automáticamente, así que márcala tú aquí cuando corresponda — controla si se puede hacer
+                check-in ahí según tu política de Recepción.
+              </p>
 
               <div className="max-h-80 space-y-2 overflow-auto">
                 {rooms.map((r) => (
@@ -278,7 +329,7 @@ export default async function ConfiguracionPage({
                       {r.bed_type ? ` · ${r.bed_type}` : ""}
                     </p>
                     <div className="mt-2 flex gap-3">
-                      <Link href={`/configuracion?tab=habitaciones&editRoomId=${r.id}`} className="text-brand underline">
+                      <Link href={`/configuracion?tab=habitaciones&editRoomId=${r.id}`} scroll={false} className="text-brand underline">
                         Editar
                       </Link>
                       <form action={submitSetRoomClean}>
@@ -307,10 +358,48 @@ export default async function ConfiguracionPage({
                 {rooms.length === 0 && <p className="text-muted">Sin habitaciones todavía.</p>}
               </div>
 
-              <form action={editingRoom ? submitUpdateRoom : submitCreateRoom} className="space-y-3 border-t border-border pt-4">
+              <form action={submitCreateRoom} className="space-y-3 border-t border-border pt-4">
                 <input type="hidden" name="hotelId" value={hotel.hotelId} />
-                {editingRoom && <input type="hidden" name="roomId" value={editingRoom.id} />}
-                <p className="font-semibold">{editingRoom ? `Editando habitación "${editingRoom.code}"` : "Nueva habitación"}</p>
+                <p className="font-semibold">Nueva habitación</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="Número/código">
+                    <TextInput name="code" required />
+                  </Field>
+                  <Field label="Tipo de habitación">
+                    <Select name="roomTypeId" required defaultValue="">
+                      <option value="">Selecciona…</option>
+                      {roomTypes.map((rt) => (
+                        <option key={rt.id} value={rt.id}>
+                          {rt.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field label="Zona / edificio">
+                    <TextInput name="building" placeholder="Ej. Torre A" />
+                  </Field>
+                  <Field label="Tipo de cama">
+                    <Select name="bedType" defaultValue="">
+                      {BED_TYPES.map((b) => (
+                        <option key={b.value} value={b.value}>
+                          {b.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+                <Button>Crear habitación</Button>
+              </form>
+            </Card>
+
+            <Modal
+              open={!!editingRoom}
+              title={editingRoom ? `Editando habitación "${editingRoom.code}"` : "Editar habitación"}
+              closeHref="/configuracion?tab=habitaciones"
+            >
+              <form action={submitUpdateRoom} className="space-y-3">
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <input type="hidden" name="roomId" value={editingRoom?.id} />
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Número/código">
                     <TextInput name="code" required defaultValue={editingRoom?.code} />
@@ -339,17 +428,15 @@ export default async function ConfiguracionPage({
                   </Field>
                 </div>
                 <div className="flex gap-2">
-                  <Button>{editingRoom ? "Guardar cambios" : "Crear habitación"}</Button>
-                  {editingRoom && (
-                    <Link href="/configuracion?tab=habitaciones">
-                      <Button variant="ghost" type="button">
-                        Cancelar
-                      </Button>
-                    </Link>
-                  )}
+                  <Button>Guardar cambios</Button>
+                  <Link href="/configuracion?tab=habitaciones" scroll={false}>
+                    <Button variant="ghost" type="button">
+                      Cancelar
+                    </Button>
+                  </Link>
                 </div>
               </form>
-            </Card>
+            </Modal>
           </div>
         )}
 
@@ -370,10 +457,25 @@ export default async function ConfiguracionPage({
                   />
                 </Field>
                 <p className="max-w-sm text-muted">
-                  Se usa en el encabezado y los acentos de las 3 páginas. Sin motor de branding completo todavía (logo,
-                  etc.) — sólo este color.
+                  Se usa en el encabezado y los acentos de las páginas.
                 </p>
                 <Button>Guardar color</Button>
+              </form>
+              <form action={submitUpdateBrandLogo} className="flex flex-wrap items-end gap-3 border-t border-border pt-4">
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <Field label="Logo del hotel (URL)" className="min-w-[280px] flex-1">
+                  <TextInput
+                    name="logoUrl"
+                    type="url"
+                    placeholder="https://…/logo.png"
+                    defaultValue={(hotelPolicies.extra_settings as { logo_url?: string } | null)?.logo_url ?? ""}
+                  />
+                </Field>
+                <p className="max-w-sm text-muted">
+                  Se muestra junto al nombre del hotel en el menú lateral. Por URL (sube tu logo a donde ya lo tengas
+                  alojado) — todavía no hay subida de archivo directa. Deja vacío para quitarlo.
+                </p>
+                <Button>Guardar logo</Button>
               </form>
             </Card>
 
