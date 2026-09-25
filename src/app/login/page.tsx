@@ -1,4 +1,4 @@
-import { signIn, signUp } from "./actions";
+import { signIn, signUp, requestPasswordReset } from "./actions";
 import { Card } from "@/components/ui/Card";
 import { Field, TextInput } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -36,6 +36,17 @@ export default async function LoginPage({
               Crear cuenta
             </Button>
           </div>
+        </form>
+
+        {/* Recovery de contraseña (issue #8): el enlace aterriza en
+            /auth/confirm -> /update-password. Respuesta genérica para
+            no revelar si el correo existe. */}
+        <form action={requestPasswordReset} className="mt-6 space-y-3">
+          <p className="text-center text-xs text-muted-strong">¿Olvidaste tu contraseña?</p>
+          <TextInput name="email" type="email" required placeholder="tu@hotel.com" />
+          <Button variant="secondary" className="w-full">
+            Enviar enlace de restablecimiento
+          </Button>
         </form>
       </Card>
     </div>
