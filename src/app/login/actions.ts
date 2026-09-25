@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { headers } from "next/headers";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 /**
  * Decide a dónde va el usuario tras autenticarse:
  *   - plataforma (Órbita 360)        -> /admin
@@ -91,14 +92,21 @@ export async function requestPasswordReset(formData: FormData) {
   if (!email) {
     redirect(`/login?error=${encodeURIComponent("Escribe tu correo para restablecer la contraseña.")}`);
   }
-
   const origin = (await headers()).get("origin");
   if (!origin) {
     redirect(`/login?error=${encodeURIComponent("No se pudo preparar el enlace. Intenta de nuevo.")}`);
   }
 
-  const supabase = await createClient();
-  await supabase.auth.resetPasswordForEmail(email, {
+  // Cliente EFÍMERO con flow implícito: el correo sale con
+  // ?token_hash=&type=recovery en vez de ?code= (PKCE). El verifier PKCE
+  // no aplica a flujos iniciados en el servidor — el link debe funcionar
+  // en cualquier dispositivo donde se abra el correo.
+  const mailer = createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { flowType: "implicit", persistSession: false, autoRefreshToken: false } },
+  );
+  await mailer.auth.resetPasswordForEmail(email, {
     redirectTo: `${origin}/auth/confirm`,
   });
 

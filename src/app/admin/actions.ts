@@ -23,8 +23,11 @@ async function runOrError(tab: string, fn: () => Promise<unknown>) {
     const result = await fn();
     if (typeof result === "string") successMsg = result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido";
-    redirect(tabUrl(tab, `&error=${encodeURIComponent(message)}`));
+    // No interceptar redirects de Next: deben propagarse.
+    if (typeof error === "object" && error !== null && "digest" in error) throw error;
+    console.error("[admin:runOrError]", error);   // el error real queda en logs de Vercel
+    const raw = error instanceof Error ? error.message : JSON.stringify(error);
+    redirect(tabUrl(tab, `&error=${encodeURIComponent(raw ?? "Error desconocido")}`));
   }
   revalidatePath("/admin");
   redirect(tabUrl(tab, successMsg ? `&msg=${encodeURIComponent(successMsg)}` : ""));
