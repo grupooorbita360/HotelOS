@@ -2750,6 +2750,13 @@ fallback genérico que usa Recepción los habría reemplazado por un mensaje
 menos útil en vez de dejarlos pasar tal cual. Validado con la misma
 habitación reintentando sin conflicto: mensaje de éxito, sin error.
 
+**Regla de numeración (2026-09-25):** antes de crear una migración nueva,
+verificar el número más alto REAL en `supabase/migrations/` de la rama
+principal (`claude/practical-meitner-ftyx8d`) — nunca asumir un número
+"reservado" o mencionado en conversaciones previas: esos acuerdos quedan
+obsoletos en cuanto otra sesión mergea primero (pasó con 0051→0055).
+Procedimiento: listar el directorio, tomar el máximo, usar máximo+1.
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
