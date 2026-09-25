@@ -426,6 +426,7 @@ export interface Database {
           motivo_inactivacion: string | null;
           inactive_at: string | null;
           inactive_by: string | null;
+          estimated_available_at: string | null;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -1411,6 +1412,10 @@ export interface Database {
         Args: { p_stay_id: string; p_reason?: string | null };
         Returns: Database["public"]["Tables"]["stays"]["Row"];
       };
+      undo_walked: {
+        Args: { p_stay_id: string; p_reason?: string | null };
+        Returns: Database["public"]["Tables"]["stays"]["Row"];
+      };
       register_stay_transaction: {
         Args: {
           p_stay_id: string;
@@ -1553,7 +1558,7 @@ export interface Database {
         Returns: Database["public"]["Tables"]["snapshot_comercial_habitacion"]["Row"];
       };
       deactivate_room: {
-        Args: { p_room_id: string; p_reason: string };
+        Args: { p_room_id: string; p_reason: string; p_estimated_available_at?: string | null };
         Returns: Database["public"]["Tables"]["rooms"]["Row"];
       };
       reactivate_room: {

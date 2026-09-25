@@ -25,6 +25,50 @@ export async function listStays(hotelId: string, filters: StayFilters = {}) {
   return data;
 }
 
+export interface RoomTypeHousekeepingSummary {
+  clean: number;
+  dirty: number;
+}
+
+/**
+ * Disponibilidad real por tipo de habitación (P1-7, handoff de demo P1
+ * Tanda 2): "libre" deja de ser binario -- se separa entre libre-y-limpia y
+ * libre-pero-sucia, para que la lista de llegadas diga si de verdad hay una
+ * habitación lista o si el check-in va a tropezar con el gate de limpieza de
+ * check_in() (0026). Mismo criterio de "disponible" que ya usan
+ * listAssignableRooms()/listRoomAssignmentOptions() (activa + sin
+ * room_assignments abierto) -- una sola pasada para todos los tipos del
+ * hotel, no una consulta por estancia en la lista.
+ */
+export async function getRoomTypeHousekeepingSummary(
+  hotelId: string,
+): Promise<Map<string, RoomTypeHousekeepingSummary>> {
+  const supabase = await createClient();
+  const { data: rooms, error } = await supabase
+    .from("rooms")
+    .select("id, room_type_id, is_clean")
+    .eq("hotel_id", hotelId)
+    .eq("is_active", true);
+  if (error) throw error;
+
+  const { data: activeAssignments } = await supabase
+    .from("room_assignments")
+    .select("room_id")
+    .eq("hotel_id", hotelId)
+    .is("released_at", null);
+  const occupied = new Set((activeAssignments ?? []).map((a) => a.room_id));
+
+  const summary = new Map<string, RoomTypeHousekeepingSummary>();
+  for (const r of rooms ?? []) {
+    if (occupied.has(r.id)) continue;
+    const entry = summary.get(r.room_type_id) ?? { clean: 0, dirty: 0 };
+    if (r.is_clean) entry.clean += 1;
+    else entry.dirty += 1;
+    summary.set(r.room_type_id, entry);
+  }
+  return summary;
+}
+
 export async function getStayDetails(hotelId: string, stayId: string) {
   const supabase = await createClient();
   const { data: stay, error } = await supabase

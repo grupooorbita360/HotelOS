@@ -26,6 +26,25 @@ const KNOWN_ERROR_MESSAGES: Record<string, string> = {
   REASON_REQUIRED: "Este cambio necesita un motivo.",
   INVALID_CHARGE_AMOUNT: "El monto del cobro no es válido.",
   INVALID_COMPENSATION_AMOUNT: "El monto de la compensación no es válido.",
+  // P1-4 (handoff de demo, P1 Tanda 2): estos códigos ya se lanzaban desde
+  // Recepción/Habitaciones (0026/0041) pero no estaban en este mapa -- caían
+  // al mensaje genérico sin decir qué pasó realmente. Encontrado real al
+  // investigar el reporte de "Marcar Walked" ("Error desconocido").
+  INVALID_TRANSITION: "Esta acción ya no aplica al estado actual de la estancia. Actualiza la página e inténtalo de nuevo.",
+  NO_ROOM_ASSIGNED: "Asigna una habitación antes de entregarla.",
+  DELIVERY_BLOCKED: "No se puede entregar la habitación todavía (revisa el saldo pendiente).",
+  NOSHOW_GRACE_PERIOD_NOT_ELAPSED: "Todavía no pasan los días de gracia para marcar No-Show.",
+  CHECKOUT_BLOCKED: "El check-out está bloqueado: hay saldo pendiente, activos sin devolver o incidencias abiertas.",
+  ACCOUNT_CLOSED: "La cuenta de esta estancia ya está cerrada.",
+  CONCEPT_REQUIRED: "Este movimiento necesita un concepto.",
+  INVALID_AMOUNT: "El monto no es válido.",
+  TRANSACTION_NOT_FOUND: "No se encontró ese movimiento.",
+  ROOM_NOT_FOUND: "No se encontró esa habitación.",
+  ROOM_NOT_CLEAN: "La política de este hotel no permite hacer check-in con la habitación sucia.",
+  ROOM_TYPE_NOT_FOUND: "No se encontró ese tipo de habitación.",
+  IMPACT_BLOCKING: "No se puede desactivar: hay una asignación activa que depende de esta habitación.",
+  DEACTIVATION_REASON_REQUIRED: "Desactivar una habitación necesita un motivo.",
+  RESERVATION_STAY_NOT_FOUND: "No se encontró la estancia vendida de esa reserva.",
 };
 
 function extractMessage(error: unknown): string {

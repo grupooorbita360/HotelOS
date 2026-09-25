@@ -9,6 +9,7 @@ import {
   deliverRoom,
   markNoShow,
   markWalked,
+  undoWalked,
   attemptCheckOut,
 } from "@/modules/recepcion/actions/lifecycle";
 import { registerStayTransaction, voidStayTransaction } from "@/modules/recepcion/actions/account";
@@ -108,6 +109,12 @@ export async function submitMarkWalked(formData: FormData) {
   const stayId = String(formData.get("stayId"));
   const reason = String(formData.get("reason") || "") || undefined;
   await runOrError(stayId, () => markWalked(hotelId, stayId, reason));
+}
+
+export async function submitUndoWalked(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const stayId = String(formData.get("stayId"));
+  await runOrError(stayId, () => undoWalked(hotelId, stayId));
 }
 
 export async function submitCheckOut(formData: FormData) {

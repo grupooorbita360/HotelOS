@@ -139,6 +139,23 @@ export async function markWalked(hotelId: string, stayId: string, reason?: strin
   return data;
 }
 
+/** Deshace mark_walked() (P1-4, handoff de demo P1 Tanda 2) -- ver undo_walked() (0056). */
+export async function undoWalked(hotelId: string, stayId: string, reason?: string) {
+  await requirePermission(hotelId, "checkin.perform");
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("undo_walked", { p_stay_id: stayId, p_reason: reason ?? null });
+  if (error) throw error;
+  await logTimelineEvent({
+    hotelId,
+    module: "front_desk",
+    eventType: "stay.walked_undone",
+    entityType: "stay",
+    entityId: stayId,
+    payload: { reason: reason ?? null },
+  });
+  return data;
+}
+
 export async function attemptCheckOut(hotelId: string, stayId: string) {
   await requirePermission(hotelId, "checkout.perform");
   const supabase = await createClient();

@@ -4,11 +4,19 @@ import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
 import { getHotelFeatures } from "@/lib/auth/platform";
 import { signOut } from "@/app/login/actions";
 import { formatDateRange, formatBalanceLabel } from "@/lib/format";
-import { listStays, getStayDetails, listRoomAssignmentOptions, listRoomChangeOptions, getHotelCheckinAssets } from "@/modules/recepcion/queries/stays";
+import {
+  listStays,
+  getStayDetails,
+  listRoomAssignmentOptions,
+  listRoomChangeOptions,
+  getHotelCheckinAssets,
+  getRoomTypeHousekeepingSummary,
+} from "@/modules/recepcion/queries/stays";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
+import { Badge } from "@/components/ui/Badge";
 import { KpiCard } from "@/components/ui/KpiCard";
 import { StayStatusBadge, nextActionLabel } from "@/components/ui/Badge";
 import { AppShell } from "@/components/ui/AppShell";
@@ -19,6 +27,7 @@ import {
   submitDeliverRoom,
   submitMarkNoShow,
   submitMarkWalked,
+  submitUndoWalked,
   submitCheckOut,
   submitRegisterTransaction,
   submitVoidTransaction,
@@ -89,6 +98,9 @@ export default async function RecepcionPage({
   }
 
   const allStays = await listStays(hotel.hotelId);
+  // P1-7 (handoff de demo P1 Tanda 2): una sola pasada para todo el hotel,
+  // reusada por cada fila de la lista -- no una consulta por llegada.
+  const housekeepingByRoomType = await getRoomTypeHousekeepingSummary(hotel.hotelId);
   const counts = {
     expected: allStays.filter((s) => s.status === "expected").length,
     inHouse: allStays.filter((s) => s.status === "in_house").length,
@@ -247,6 +259,10 @@ export default async function RecepcionPage({
               {stays.map((s) => {
                 const rs = s.reservation_stays!;
                 const res = rs.reservations!;
+                // P1-7 (handoff de demo P1 Tanda 2): para una llegada todavía sin
+                // habitación (expected/arrived), la disponibilidad real de su tipo
+                // -- limpia/sucia/sin unidades -- no sólo "libre".
+                const hk = ["expected", "arrived"].includes(s.status) ? housekeepingByRoomType.get(rs.room_type_id) : undefined;
                 return (
                   <Link
                     key={s.id}
@@ -263,6 +279,17 @@ export default async function RecepcionPage({
                       {rs.room_types?.name} · {formatDateRange(rs.check_in, rs.check_out)}
                     </p>
                     <p className="text-xs font-medium text-brand">{nextActionLabel(s.next_action)}</p>
+                    {hk && (
+                      <p className="mt-1">
+                        {hk.clean > 0 ? (
+                          <Badge tone="success">{`${hk.clean} limpia(s) lista(s)`}</Badge>
+                        ) : hk.dirty > 0 ? (
+                          <Badge tone="warning">{`Sólo sucia(s) disponible(s) (${hk.dirty})`}</Badge>
+                        ) : (
+                          <Badge tone="danger">Sin habitación libre de este tipo</Badge>
+                        )}
+                      </p>
+                    )}
                     {(s.stay_accounts?.balance ?? 0) > 0 && (
                       <p className="text-xs text-danger">{formatBalanceLabel(s.stay_accounts?.balance ?? 0)}</p>
                     )}
@@ -330,15 +357,16 @@ export default async function RecepcionPage({
                         </form>
                       </>
                     )}
-                    {detail.stay.status === "arrived" && (
-                      <form action={submitMarkWalked}>
+                    {/* P1-4 (handoff de demo P1 Tanda 2): "Marcar Walked" dejó de ser
+                        el único botón (prominente, en rojo) para una llegada -- se
+                        movió al final del flujo guiado de check-in, como último
+                        recurso, ver más abajo. */}
+                    {detail.stay.status === "walked" && (
+                      <form action={submitUndoWalked}>
                         <input type="hidden" name="hotelId" value={hotel.hotelId} />
                         <input type="hidden" name="stayId" value={detail.stay.id} />
-                        <Button
-                          variant="danger"
-                          title="El huésped llegó con reserva confirmada pero el hotel no tiene habitación para darle (ej. overbooking) y se le reubica en otro hotel."
-                        >
-                          Marcar Walked
+                        <Button variant="secondary" title="Regresa la estancia a 'Llegó, falta check-in' -- para cuando se marcó Walked por error.">
+                          Deshacer Walked
                         </Button>
                       </form>
                     )}
@@ -472,6 +500,23 @@ export default async function RecepcionPage({
                         </Link>
                       </>
                     )}
+
+                    {/* P1-4 (handoff de demo P1 Tanda 2): último recurso del flujo de
+                        llegada, no el primero -- antes era el único botón visible
+                        (rojo, prominente) para una estancia "arrived". Aplica sólo
+                        cuando el hotel no puede alojar al huésped (overbooking); si
+                        hay habitación disponible, el flujo de arriba es el camino
+                        normal. */}
+                    <form action={submitMarkWalked} className="border-t border-border pt-3 text-right">
+                      <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                      <input type="hidden" name="stayId" value={detail.stay.id} />
+                      <Button
+                        variant="ghost"
+                        title="El huésped llegó con reserva confirmada pero el hotel no tiene habitación para darle (ej. overbooking) y se le reubica en otro hotel. Es reversible con 'Deshacer Walked'."
+                      >
+                        No se puede alojar — Marcar Walked
+                      </Button>
+                    </form>
                   </Card>
                 )}
 
