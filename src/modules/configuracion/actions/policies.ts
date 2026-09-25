@@ -128,6 +128,49 @@ export async function updateBrandColor(hotelId: string, hexColor: string | null)
  * ronda. Un hotel sin logo (URL vacía) simplemente no muestra ninguno en
  * AppShell -- nunca un ícono roto.
  */
+/**
+ * Política de cancelación + instrucciones de pago para el texto de
+ * cotización completo (P1-8, handoff de demo P1 Tanda 2) -- mismo patrón
+ * exacto que updateBrandColor()/updateBrandLogo(): texto libre en
+ * hotel_policies.extra_settings, no columnas ni tabla nueva. Se combinan en
+ * una sola función (un solo formulario en la UI las edita juntas) en vez de
+ * repetir la función de dos líneas una tercera y cuarta vez.
+ */
+export async function updateQuotingContent(
+  hotelId: string,
+  input: { cancellationPolicyText: string | null; paymentInstructionsText: string | null },
+) {
+  await requirePermission(hotelId, "hotel.settings.manage");
+  const supabase = await createClient();
+
+  const { data: current, error: currentError } = await supabase
+    .from("hotel_policies")
+    .select("extra_settings")
+    .eq("hotel_id", hotelId)
+    .single();
+  if (currentError) throw currentError;
+
+  const nextSettings: Record<string, Json> = { ...((current.extra_settings as Record<string, Json>) ?? {}) };
+  if (input.cancellationPolicyText) nextSettings.cancellation_policy_text = input.cancellationPolicyText;
+  else delete nextSettings.cancellation_policy_text;
+  if (input.paymentInstructionsText) nextSettings.payment_instructions_text = input.paymentInstructionsText;
+  else delete nextSettings.payment_instructions_text;
+
+  const { error } = await supabase
+    .from("hotel_policies")
+    .update({ extra_settings: nextSettings })
+    .eq("hotel_id", hotelId);
+  if (error) throw error;
+
+  await logTimelineEvent({
+    hotelId,
+    module: "core",
+    eventType: "hotel_policies.updated",
+    entityType: "hotel_policies",
+    entityId: hotelId,
+  });
+}
+
 export async function updateBrandLogo(hotelId: string, logoUrl: string | null) {
   await requirePermission(hotelId, "hotel.settings.manage");
   if (logoUrl && !/^https?:\/\//i.test(logoUrl)) {

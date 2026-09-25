@@ -9,7 +9,7 @@ import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
 import { listRoomTypes, searchAvailableOptions } from "@/modules/reservaciones/queries/availability";
 import { listReservations, listActiveHolds } from "@/modules/reservaciones/queries/reservations";
 import { listLeads } from "@/modules/reservaciones/queries/leads";
-import { getQuoteOptionDetails, getHoldDetails, getReservationDetails } from "@/modules/reservaciones/queries/details";
+import { getQuoteOptionDetails, getQuoteCopyContext, getHoldDetails, getReservationDetails } from "@/modules/reservaciones/queries/details";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -116,6 +116,36 @@ export default async function ReservacionesPage({
   const activeHolds = await listActiveHolds(hotel.hotelId);
 
   const quoteOption = params.quoteOptionId ? await getQuoteOptionDetails(hotel.hotelId, params.quoteOptionId) : null;
+  // P1-8 (handoff de demo P1 Tanda 2): amenidades + política de cancelación/
+  // cómo pagar del hotel, para el texto completo de "Copiar cotización".
+  const quoteCopyContext = quoteOption ? await getQuoteCopyContext(hotel.hotelId, quoteOption.room_type_id) : null;
+  const quoteNights = quoteOption
+    ? Math.max(
+        1,
+        Math.round((new Date(quoteOption.check_out).getTime() - new Date(quoteOption.check_in).getTime()) / 86400000),
+      )
+    : 1;
+  // Tarifa por noche derivada del total ya calculado (create_quote_option(),
+  // fuente única de precio) -- nunca recalculada aparte.
+  const quoteNightlyRate = quoteOption ? Math.round((Number(quoteOption.total) / quoteNights) * 100) / 100 : 0;
+  const fullQuoteText = quoteOption
+    ? [
+        `${quoteOption.room_types?.name} — ${formatDateRange(quoteOption.check_in, quoteOption.check_out)}`,
+        quoteOption.room_types?.description || null,
+        quoteCopyContext && quoteCopyContext.amenityNames.length > 0
+          ? `Incluye: ${quoteCopyContext.amenityNames.join(", ")}`
+          : null,
+        `${quoteOption.adults} adulto(s), ${quoteOption.children} niño(s)`,
+        `$${quoteNightlyRate}/noche x ${quoteNights} noche(s) = Subtotal $${quoteOption.subtotal} + impuestos $${quoteOption.taxes} = Total $${quoteOption.total} MXN`,
+        `Huésped: ${quoteOption.quotes?.leads?.guest_name ?? ""}${
+          quoteOption.quotes?.leads?.guest_phone ? ` · ${quoteOption.quotes.leads.guest_phone}` : ""
+        }`,
+        quoteCopyContext?.cancellationPolicyText ? `Política de cancelación: ${quoteCopyContext.cancellationPolicyText}` : null,
+        quoteCopyContext?.paymentInstructionsText ? `Cómo pagar: ${quoteCopyContext.paymentInstructionsText}` : null,
+      ]
+        .filter((line): line is string => Boolean(line))
+        .join("\n")
+    : "";
   const hold = params.holdId ? await getHoldDetails(hotel.hotelId, params.holdId) : null;
   const reservationDetail = params.reservationId ? await getReservationDetails(hotel.hotelId, params.reservationId) : null;
   const leadDetail = params.leadId ? leads.find((l) => l.id === params.leadId) : null;
@@ -493,20 +523,32 @@ export default async function ReservacionesPage({
               <strong>{quoteOption.room_types?.name}</strong>: {formatDateRange(quoteOption.check_in, quoteOption.check_out)} ·{" "}
               {quoteOption.adults} adultos, {quoteOption.children} niños
             </p>
+            {quoteOption.room_types?.description && <p className="text-muted">{quoteOption.room_types.description}</p>}
+            {quoteCopyContext && quoteCopyContext.amenityNames.length > 0 && (
+              <p className="text-muted">Incluye: {quoteCopyContext.amenityNames.join(", ")}</p>
+            )}
             <div className="rounded-xl bg-brand-soft p-4">
+              {/* P1-8 (handoff de demo P1 Tanda 2): tarifa por noche además del
+                  desglose ya existente -- total/noches, la misma fuente de
+                  precio que ya se muestra (create_quote_option(), auditoría de
+                  precio Tier 1/2), no un cálculo aparte. */}
               <p className="text-muted-strong">
-                Subtotal ${quoteOption.subtotal} + impuestos ${quoteOption.taxes}
+                ${quoteNightlyRate}/noche x {quoteNights} noche(s) = Subtotal ${quoteOption.subtotal} + impuestos $
+                {quoteOption.taxes}
               </p>
               <p className="text-2xl font-bold text-brand">Total ${quoteOption.total}</p>
             </div>
             <p className="text-muted">
               Huésped: {quoteOption.quotes?.leads?.guest_name} ({quoteOption.quotes?.leads?.guest_email || "sin correo"})
             </p>
-            <form action={submitCreateHold}>
-              <input type="hidden" name="hotelId" value={hotel.hotelId} />
-              <input type="hidden" name="quoteOptionId" value={quoteOption.id} />
-              <Button>Aceptar y reservar (crear Hold)</Button>
-            </form>
+            <div className="flex flex-wrap gap-3">
+              <form action={submitCreateHold}>
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <input type="hidden" name="quoteOptionId" value={quoteOption.id} />
+                <Button>Aceptar y reservar (crear Hold)</Button>
+              </form>
+              <CopyQuoteButton text={fullQuoteText} />
+            </div>
           </Card>
         )}
 

@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
+import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 
 const inputClass =
   "mt-1.5 w-full rounded-lg border border-border-strong bg-surface px-3.5 py-2.5 text-sm text-foreground outline-none focus:border-brand focus:ring-1 focus:ring-brand";
@@ -26,4 +26,8 @@ export function TextInput(props: InputHTMLAttributes<HTMLInputElement>) {
 
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} className={`${inputClass} ${props.className ?? ""}`} />;
+}
+
+export function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea {...props} className={`${inputClass} ${props.className ?? ""}`} />;
 }
