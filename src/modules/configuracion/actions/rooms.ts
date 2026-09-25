@@ -174,7 +174,13 @@ export async function updateRoom(hotelId: string, roomId: string, input: RoomInp
  * importando el Server Action de Habitaciones (regla 7 -- mismo patrón
  * que Rack llamando assign_room() por RPC).
  */
-export async function setRoomActive(hotelId: string, roomId: string, isActive: boolean, reason?: string) {
+export async function setRoomActive(
+  hotelId: string,
+  roomId: string,
+  isActive: boolean,
+  reason?: string,
+  estimatedAvailableAt?: string,
+) {
   await requirePermission(hotelId, "hotel.settings.manage");
   const supabase = await createClient();
 
@@ -183,7 +189,14 @@ export async function setRoomActive(hotelId: string, roomId: string, isActive: b
     if (error) throw error;
   } else {
     if (!reason?.trim()) throw new Error("Desactivar una habitación requiere un motivo.");
-    const { error } = await supabase.rpc("deactivate_room", { p_room_id: roomId, p_reason: reason });
+    // P1-12 (handoff de demo P1 Tanda 2): fecha estimada de entrega, opcional
+    // -- deactivate_room() (0058) la fija junto con motivo/inactive_at, nunca
+    // a mano.
+    const { error } = await supabase.rpc("deactivate_room", {
+      p_room_id: roomId,
+      p_reason: reason,
+      p_estimated_available_at: estimatedAvailableAt || null,
+    });
     if (error) throw error;
   }
 
@@ -193,7 +206,7 @@ export async function setRoomActive(hotelId: string, roomId: string, isActive: b
     eventType: isActive ? "room.reactivated" : "room.deactivated",
     entityType: "room",
     entityId: roomId,
-    payload: isActive ? undefined : { reason: reason as string },
+    payload: isActive ? undefined : { reason: reason as string, estimated_available_at: estimatedAvailableAt || null },
   });
 }
 

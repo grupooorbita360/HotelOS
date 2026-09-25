@@ -11,7 +11,13 @@ import {
   setRoomActive,
   setRoomClean,
 } from "@/modules/configuracion/actions/rooms";
-import { updateHotelPolicies, updateReceptionSettings, updateBrandColor, updateBrandLogo } from "@/modules/configuracion/actions/policies";
+import {
+  updateHotelPolicies,
+  updateReceptionSettings,
+  updateBrandColor,
+  updateBrandLogo,
+  updateQuotingContent,
+} from "@/modules/configuracion/actions/policies";
 import { addStaffMember, changeStaffRole, setStaffActive } from "@/modules/configuracion/actions/staff";
 import { createPaymentMethod, setPaymentMethodActive, updateCashSettings } from "@/modules/configuracion/actions/payments";
 
@@ -100,7 +106,8 @@ export async function submitSetRoomActive(formData: FormData) {
   const roomId = String(formData.get("roomId"));
   const isActive = formData.get("isActive") === "true";
   const reason = String(formData.get("reason") || "") || undefined;
-  await runOrError("habitaciones", () => setRoomActive(hotelId, roomId, isActive, reason));
+  const estimatedAvailableAt = String(formData.get("estimatedAvailableAt") || "") || undefined;
+  await runOrError("habitaciones", () => setRoomActive(hotelId, roomId, isActive, reason, estimatedAvailableAt));
 }
 
 export async function submitSetRoomClean(formData: FormData) {
@@ -146,6 +153,13 @@ export async function submitUpdateBrandLogo(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const logoUrl = String(formData.get("logoUrl") || "").trim() || null;
   await runOrError("politicas", () => updateBrandLogo(hotelId, logoUrl));
+}
+
+export async function submitUpdateQuotingContent(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const cancellationPolicyText = String(formData.get("cancellationPolicyText") || "").trim() || null;
+  const paymentInstructionsText = String(formData.get("paymentInstructionsText") || "").trim() || null;
+  await runOrError("politicas", () => updateQuotingContent(hotelId, { cancellationPolicyText, paymentInstructionsText }));
 }
 
 export async function submitAddStaffMember(formData: FormData) {

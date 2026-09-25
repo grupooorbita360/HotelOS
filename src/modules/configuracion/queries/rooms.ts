@@ -16,7 +16,9 @@ export async function listRooms(hotelId: string) {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("rooms")
-    .select("id, code, building, bed_type, is_active, is_clean, room_type_id, room_types(name)")
+    .select(
+      "id, code, building, bed_type, is_active, is_clean, room_type_id, motivo_inactivacion, estimated_available_at, room_types(name)",
+    )
     .eq("hotel_id", hotelId)
     .order("code");
   if (error) throw error;

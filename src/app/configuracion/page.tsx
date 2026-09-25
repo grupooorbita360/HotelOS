@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getCurrentUserHotel } from "@/lib/auth/session";
+import { formatDate } from "@/lib/format";
 import { getHotelFeatures } from "@/lib/auth/platform";
 import { hasPermission } from "@/lib/auth/permissions";
 import { signOut } from "@/app/login/actions";
@@ -9,7 +10,7 @@ import { getHotelPolicies, getReceptionSettings } from "@/modules/configuracion/
 import { listHotelStaff, listSystemRoles } from "@/modules/configuracion/queries/staff";
 import { listPaymentMethodsForConfig, getCashSettingsForConfig } from "@/modules/configuracion/queries/payments";
 import { Card, CardTitle } from "@/components/ui/Card";
-import { Field, TextInput, Select } from "@/components/ui/Field";
+import { Field, TextInput, Select, TextArea } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { Badge } from "@/components/ui/Badge";
@@ -27,6 +28,7 @@ import {
   submitUpdateReceptionSettings,
   submitUpdateBrandColor,
   submitUpdateBrandLogo,
+  submitUpdateQuotingContent,
   submitAddStaffMember,
   submitChangeStaffRole,
   submitSetStaffActive,
@@ -328,7 +330,17 @@ export default async function ConfiguracionPage({
                       {r.building ? ` · ${r.building}` : ""}
                       {r.bed_type ? ` · ${r.bed_type}` : ""}
                     </p>
-                    <div className="mt-2 flex gap-3">
+                    {/* P1-12 (handoff de demo P1 Tanda 2): motivo + fecha estimada de
+                        entrega visibles mientras la habitación está fuera de
+                        servicio -- ambos ya los fija deactivate_room(), aquí sólo
+                        se muestran. */}
+                    {!r.is_active && (r.motivo_inactivacion || r.estimated_available_at) && (
+                      <p className="text-xs text-muted">
+                        {r.motivo_inactivacion}
+                        {r.estimated_available_at ? ` · Regresa el ${formatDate(r.estimated_available_at)}` : ""}
+                      </p>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-3">
                       <Link href={`/configuracion?tab=habitaciones&editRoomId=${r.id}`} scroll={false} className="text-brand underline">
                         Editar
                       </Link>
@@ -338,17 +350,25 @@ export default async function ConfiguracionPage({
                         <input type="hidden" name="isClean" value={(!r.is_clean).toString()} />
                         <button className="text-brand underline">{r.is_clean ? "Marcar sucia" : "Marcar limpia"}</button>
                       </form>
-                      <form action={submitSetRoomActive} className="flex items-center gap-2">
+                      <form action={submitSetRoomActive} className="flex flex-wrap items-center gap-2">
                         <input type="hidden" name="hotelId" value={hotel.hotelId} />
                         <input type="hidden" name="roomId" value={r.id} />
                         <input type="hidden" name="isActive" value={(!r.is_active).toString()} />
                         {r.is_active && (
-                          <input
-                            name="reason"
-                            placeholder="Motivo (obligatorio)"
-                            required
-                            className="w-40 rounded border border-border px-2 py-1 text-xs"
-                          />
+                          <>
+                            <input
+                              name="reason"
+                              placeholder="Motivo (obligatorio)"
+                              required
+                              className="w-40 rounded border border-border px-2 py-1 text-xs"
+                            />
+                            <input
+                              name="estimatedAvailableAt"
+                              type="date"
+                              title="Fecha estimada de entrega (opcional)"
+                              className="rounded border border-border px-2 py-1 text-xs"
+                            />
+                          </>
                         )}
                         <button className="text-danger underline">{r.is_active ? "Desactivar" : "Reactivar"}</button>
                       </form>
@@ -517,6 +537,44 @@ export default async function ConfiguracionPage({
                   cambia las tarifas ni montos que ya ves en Reservaciones y Recepción.
                 </p>
                 <Button>Guardar políticas</Button>
+              </form>
+            </Card>
+
+            {/* P1-8 (handoff de demo P1 Tanda 2): texto libre que alimenta "Copiar
+                cotización" en Reservaciones -- no existía ningún campo real para
+                política de cancelación ni instrucciones de pago (verificado
+                contra el esquema), mismo patrón que brand_color/logo_url. */}
+            <Card className="space-y-4">
+              <CardTitle>Cotización</CardTitle>
+              <p className="text-xs text-muted">
+                Se agregan al texto de &ldquo;Copiar cotización&rdquo; en Reservaciones, junto con la habitación,
+                precio desglosado y amenidades. Deja vacío para omitir esa sección del texto.
+              </p>
+              <form action={submitUpdateQuotingContent} className="space-y-3">
+                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                <Field label="Política de cancelación">
+                  <TextArea
+                    name="cancellationPolicyText"
+                    rows={3}
+                    placeholder="Ej. Cancelación gratuita hasta 48h antes del check-in. Después, se retiene la primera noche."
+                    defaultValue={
+                      (hotelPolicies.extra_settings as { cancellation_policy_text?: string } | null)
+                        ?.cancellation_policy_text ?? ""
+                    }
+                  />
+                </Field>
+                <Field label="Cómo pagar">
+                  <TextArea
+                    name="paymentInstructionsText"
+                    rows={3}
+                    placeholder="Ej. Transferencia a CLABE 0123..., o tarjeta al llegar."
+                    defaultValue={
+                      (hotelPolicies.extra_settings as { payment_instructions_text?: string } | null)
+                        ?.payment_instructions_text ?? ""
+                    }
+                  />
+                </Field>
+                <Button>Guardar</Button>
               </form>
             </Card>
 

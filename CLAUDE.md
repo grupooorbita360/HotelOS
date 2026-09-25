@@ -221,6 +221,10 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0052_quote_discount_authorization.sql` | `create_quote_option()` gana `p_is_courtesy`/`p_discount_reason` -- exige `reservations.discount` + motivo para cotizar fuera de la tarifa de lista (P0-7, ver "Handoff de demo P0") |
 | `0053_fix_reset_demo_hotel_leads_fk.sql` | Fix real: `reset_demo_hotel()` (0050) borraba `reservations` antes de desvincular `leads.reservation_id` -- fallaba con violación de FK en cuanto el hotel demo real acumulaba algún lead convertido por uso genuino de la app (ver "Handoff de demo P0") |
 | `0054_fix_reset_demo_hotel_holds_fk.sql` | Mismo problema que 0053, columna distinta: `inventory_holds.converted_reservation_id` (que `confirm_reservation_from_hold()`, 0016, fija en TODO Hold confirmado) tampoco se desvinculaba antes del wipe -- más grave que 0053 porque no es un caso raro, es el camino normal de confirmar una reserva (ver "Handoff de demo P0") |
+| `0055_hotels_is_demo.sql` | `hotels.is_demo` -- fuente de verdad única para el aislamiento del Hotel Demo (issue #16), reemplaza detectarlo por `slug = 'hotel-demo'`; `reset_demo_hotel()` recreada consultando por `is_demo`. Traída por PR #18 (`feature/is-demo-0051`), reconciliada al mergear ese PR a esta rama |
+| `0056_undo_walked.sql` | `undo_walked()` -- deshace `mark_walked()` (0026), regresa la estancia a `arrived` y limpia `walked_at`/`walked_reason` (P1-4, ver "Handoff de demo P1, Tanda 2") |
+| `0057_checkout_marks_room_dirty.sql` | `attempt_check_out()` (recreada sobre 0026) marca `is_clean = false` en la habitación que libera -- puente temporal hasta que exista Housekeeping real (P1-7, ver "Handoff de demo P1, Tanda 2") |
+| `0058_room_deactivation_estimated_date.sql` | `rooms.estimated_available_at`; `deactivate_room()` gana `p_estimated_available_at` opcional (drop + create, cambia la firma), `reactivate_room()` la limpia (P1-12, ver "Handoff de demo P1, Tanda 2") |
 
 **Nota sobre el hueco en 0049 y la reconciliación de `feature/demo-reset`
 (commit `2ab7580`):** `feature/demo-reset` es una rama remota que se
@@ -240,8 +244,10 @@ NO aplicó nada nuevo a la base de datos, sólo la deja versionada aquí.
 `feature/demo-reset`) insertadas en el mismo punto del archivo --
 resuelto conservando ambas, sin pérdida de ninguna. `0049` queda vacío a
 propósito, documentado aquí para que ninguna sesión futura intente
-reusar ese número: el primer número real y libre para migraciones nuevas
-es **`0051`**.
+reusar ese número. El primer número real y libre para migraciones nuevas
+avanza según la tabla de arriba -- al momento de escribir esto (después de
+`0058`) es **`0059`**; no reafirmes aquí un número fijo, revisa siempre
+`supabase/migrations/` para el máximo real antes de crear una migración.
 
 Todas las tablas de este listado tienen RLS activado y probado (ver sección
 "Cómo se validó" abajo). Ninguna tiene política de `DELETE` salvo que se
@@ -2539,6 +2545,195 @@ que el Lead de Luciana Torres (`c682c425-...`) es el **mismo** antes y
 después -- nunca se creó un segundo Lead -- y que terminó con
 `status = 'converted'` y `reservation_id` apuntando a la reserva nueva,
 exactamente el ciclo de vida esperado de un Lead que se convierte.
+
+## Handoff de demo P1, Tanda 2 (lógica de negocio)
+
+Cinco hallazgos (P1-4, P1-7, P1-8, P1-12, P1-14) de la misma lista P1 que la
+Tanda 1 (UI/UX de bajo riesgo) dejó fuera a propósito por tocar lógica de
+negocio real. P2 no se tocó. Validado en vivo contra Hotel Demo real
+(`reset_demo_hotel()` antes de probar) para todo lo que no depende de una
+migración nueva -- ver la nota de migraciones pendientes al final de esta
+sección, es importante leerla antes de dar esta ronda por cerrada.
+
+### P1-4: "Marcar Walked" reversible y menos prominente
+
+**"Error desconocido" no se pudo reproducir de forma determinista.**
+`mark_walked()` (0026) se probó directo por RPC y a través del flujo
+completo de la UI, con y sin motivo, contra Hotel Demo real -- en todos los
+casos, 200 y la estancia queda en `status = 'walked'`, sin error. Lo que sí
+se confirmó real, leyendo `src/lib/friendlyError.ts`: varios códigos que
+Recepción/Habitaciones ya lanzan (`INVALID_TRANSITION` el más relevante
+aquí) no estaban en el mapa de mensajes conocidos -- caían al mensaje
+genérico, la clase de experiencia "no dice qué pasó" que el reporte
+describe. Se agregaron (ver más abajo) y se validó en vivo el caso real que
+sí los dispara: una estancia cuyo estado cambia (por otra pestaña/usuario)
+entre que se carga la página y se envía el formulario -- antes caía al
+genérico, ahora muestra "Esta acción ya no aplica al estado actual de la
+estancia. Actualiza la página e inténtalo de nuevo." (probado forzando el
+cambio de estado por REST mientras la página ya estaba cargada, simulando
+la carrera real).
+
+**Reordenado y des-enfatizado.** Antes, "Marcar Walked" era el ÚNICO botón
+visible (rojo, `variant="danger"`) para una estancia `arrived` -- aparecía
+ANTES del flujo guiado de check-in normal (Cuenta → Habitación), no
+después. Se movió al final de ese mismo Card (después de ambos pasos,
+visible en los dos), como link `variant="ghost"` con el texto "No se puede
+alojar — Marcar Walked" -- último recurso, no el primero.
+
+**Reversible.** `undo_walked()` (0056, nueva) regresa la estancia a
+`arrived` (nunca a `expected` -- el huésped sí llegó) y limpia
+`walked_at`/`walked_reason`, mismo patrón que `reactivate_room()` (0041).
+Un botón "Deshacer Walked" (`variant="secondary"`, no danger -- corregir un
+error no es una acción destructiva) aparece sólo para `status = 'walked'`.
+El evento original (`stay.walked`) y el de deshacer (`stay.walked_undone`)
+quedan ambos en `timeline_events` -- el historial de que ocurrió y se
+corrigió no se borra, sólo el estado operativo actual.
+
+### P1-7 + hallazgo de P1-13: disponibilidad real de housekeeping
+
+**En la lista de Estancias, una llegada sin habitación (`expected`/
+`arrived`) ya no dice sólo "libre".** `getRoomTypeHousekeepingSummary()`
+(nueva, `modules/recepcion/queries/stays.ts`) cuenta, para cada tipo de
+habitación, cuántas unidades activas y sin asignación activa hay --
+separadas por `is_clean` -- en una sola pasada para todo el hotel (no una
+consulta por llegada). Cada fila de la lista muestra "N limpia(s)
+lista(s)" / "Sólo sucia(s) disponible(s) (N)" / "Sin habitación libre de
+este tipo" según corresponda. Validado en vivo: con las 4 Sencillas
+limpias salvo una, mostró "3 limpia(s) lista(s)"; forzando las 4 a sucias
+por REST, cambió a "Sólo sucia(s) disponible(s) (3)" (una ya estaba
+ocupada) sin recargar nada más que la página.
+
+**El check-out ya marca sucia la habitación.** P1-13 (Tanda 1) ya había
+documentado el hallazgo: ninguna función del flujo marcaba
+`rooms.is_clean = false`, así que "Marcar sucia" en Configuración era la
+ÚNICA forma real de que pasara -- sin relación con que el huésped
+realmente se hubiera ido. `attempt_check_out()` (0057, recreada sobre
+0026) ahora marca `is_clean = false` en la(s) habitación(es) que libera,
+en el mismo `UPDATE` que ya hacía sobre `room_assignments` -- puente
+temporal mínimo hasta que exista Housekeeping real, tal como se pidió
+explícitamente (no se construyó Housekeeping completo). No se tocó
+ninguna otra función de la máquina de estados.
+
+### P1-8: cotización completa
+
+**`src/lib/pricing.ts` (`calculateStayPrice()`) ya no existe** -- se borró
+en el Tier 2 de la auditoría de fuente única de precio (0048, ver esa
+sección arriba): el cálculo se movió por completo a `create_quote_option()`
+(SQL). El pedido asumía que seguía ahí; verificado antes de escribir
+código, no asumido. La fuente correcta hoy es el resultado YA calculado
+por el RPC (`quote_options.subtotal/taxes/total`, que la página ya carga)
+-- ningún recálculo nuevo en TypeScript, más alineado con el principio de
+fuente única que si se hubiera revivido el archivo borrado.
+
+**"2. Cotización emitida" ahora muestra tarifa por noche** (derivada de
+`total / noches`, no un cálculo aparte) además del desglose que ya tenía
+(subtotal + impuestos = total), y gana su propio "Copiar cotización" --
+antes ese botón sólo existía en el Paso 1 (una ESTIMACIÓN antes de cotizar
+de verdad, sin subtotal/impuestos reales); el Paso 2 (después de
+`create_quote_option()`, con los montos reales) no tenía ninguno.
+
+**Contenido nuevo del texto completo** (`getQuoteCopyContext()`,
+`modules/reservaciones/queries/details.ts`): descripción del tipo
+(`room_types.description`, ya existía desde 0041, sin usar en Reservaciones
+hasta ahora) + amenidades base del tipo (`tipo_habitacion_amenidad` +
+`catalogo_amenidades`, mismo nivel al que Reservaciones ya cotiza -- sin
+resolver excepciones por habitación física, todavía no hay una habitación
+elegida en este punto del flujo) + política de cancelación + cómo pagar.
+
+**Política de cancelación y cómo pagar son texto libre nuevo**, mismo
+patrón que `brand_color`/`logo_url` (P1-2): no existía ningún campo real
+para esto (verificado contra el esquema antes de escribir nada) --
+`hotel_policies.extra_settings.cancellation_policy_text` /
+`.payment_instructions_text`, editables en Configuración → Políticas →
+Cotización (`updateQuotingContent()`, una sola función para las dos, no
+dos casi-idénticas más). Se agregó `TextArea` a `components/ui/Field.tsx`
+(no existía ningún campo de texto largo en el proyecto hasta ahora).
+
+**Validado en vivo contra Hotel Demo real, end-to-end con lectura real del
+portapapeles** (Playwright con permisos de clipboard, no sólo que el botón
+exista): se guardaron política de cancelación + cómo pagar reales desde
+Configuración, se agregaron 2 amenidades de prueba a Sencilla, se cotizó
+(1 adulto, 3 noches, tarifa de lista) y el texto copiado fue exactamente
+el esperado -- nombre + fechas, descripción, "Incluye: ...", pax, "$1150/
+noche x 3 noche(s) = Subtotal $2974.14 + impuestos $475.86 = Total $3450
+MXN", huésped, política de cancelación, cómo pagar -- cada línea presente
+sólo cuando hay contenido real (sin amenidades no se agrega esa línea, sin
+política de cancelación tampoco esa).
+
+### P1-12: fuera de servicio con fecha estimada de entrega
+
+**Motivo/inactive_at/inactive_by NO se duplican** -- pedido explícito, ya
+obligatorios desde 0041 y ya fijados sólo por `deactivate_room()`. Lo
+único genuinamente nuevo, verificado contra el esquema real antes de
+escribir la migración: ningún campo equivalente a "fecha estimada de
+entrega" existía. Se agregó `rooms.estimated_available_at` (date,
+nullable) -- 0058.
+
+`deactivate_room()` gana `p_estimated_available_at` (opcional) -- mismo
+criterio que 0037/0047/0052: agregar un parámetro cambia la firma
+(`(uuid,text)` -> `(uuid,text,date)`), así que `create or replace` sólo
+habría creado un OVERLOAD nuevo dejando las dos versiones vivas; se
+eliminó explícitamente la firma vieja antes de recrear.
+`reactivate_room()` la limpia junto con los demás campos de desactivación
+(misma firma, sin cambio de parámetros). En Configuración, el formulario
+de "Desactivar" gana un campo de fecha opcional junto al motivo
+(obligatorio, sin cambio); la habitación inactiva muestra motivo + "Regresa
+el {fecha}" cuando hay una estimación. No se construyó el módulo de
+Mantenimiento completo (pedido explícito) -- sólo el campo de captura y que
+quede visible.
+
+### P1-14: crecimiento de inventario -- no había nada bloqueando
+
+Se verificó, no se asumió: Hotel Demo tiene `hotel_licenses.rooms_max =
+NULL` (sin límite, plan `pro`) -- ninguna de las suspechas del pedido
+("límite mal calculado", "contador que no se actualiza") aplicaba ahí. Se
+insertó una habitación de prueba directo por REST (simulando exactamente
+lo que hace `createRoom()`) y se confirmó contra `hotel_limit_usage()`
+real: `rooms_active` pasó de 9 a 10 de inmediato, sin caché ni paso manual
+-- la función es `stable` porque es una consulta pura, sin limpieza
+perezosa de por medio (no aplica la lección de la regla 9 aquí). Habitación de prueba
+borrada después de confirmar. El límite en sí sólo se aplica en la capa de
+Server Action (`assertRoomLimit()`, `src/lib/auth/platform.ts`) contra
+`hotel_licenses.rooms_max` -- eso ya estaba documentado como decisión de
+diseño (no es RLS, es un gate de negocio) desde la sección de Plataforma;
+P1-14 no pidió cambiar eso, sólo confirmar que no había un bug ahí, y no
+lo hay.
+
+El Rack sí puede tardar hasta 45s en reflejar una habitación recién
+creada -- su cache en memoria (`getRackGrid()`, ver sección Rack) expira
+solo, sin paso manual; no se tocó, es el comportamiento ya documentado y
+aceptado para ese cache, no un bug de este punto.
+
+### Migraciones de esta ronda -- pendientes de aplicar contra Supabase real
+
+**Importante, léase antes de mergear:** `0056_undo_walked.sql`,
+`0057_checkout_marks_room_dirty.sql` y `0058_room_deactivation_estimated_date.sql`
+se escribieron y se razonaron con el mismo rigor que toda migración de
+este proyecto, pero **no se pudieron aplicar ni probar contra Supabase
+real en esta sesión** -- el entorno sólo tenía las API keys de REST
+(anon/service role), sin credencial de conexión directa a Postgres
+(`supabase link`/`db push` piden `supabase login` o
+`SUPABASE_ACCESS_TOKEN`, ninguno disponible). Se confirmó explícitamente
+antes de darlo por imposible (no se asumió): sin token de acceso, sin
+contraseña de base de datos en ningún `.env*`, sin credencial en
+`~/.supabase`.
+
+Esto tiene una consecuencia real y ya confirmada, no hipotética:
+`listRooms()` (`modules/configuracion/queries/rooms.ts`) ahora selecciona
+`estimated_available_at`, columna que 0058 todavía no aplicó -- **hasta
+que se aplique esa migración, `/configuracion?tab=habitaciones` responde
+500** (`42703: column rooms.estimated_available_at does not exist`,
+confirmado en vivo). El resto de la app no se ve afectado: `undo_walked()`
+faltante hace que "Deshacer Walked" falle limpio con el mensaje genérico
+(sin crash, ya probado en vivo con la migración todavía sin aplicar) en
+vez de romper la página, porque ya pasa por el mismo `try/catch` +
+`friendlyErrorMessage()` que protege el resto de Recepción.
+
+Aplicar las tres migraciones (SQL Editor de Supabase o
+`npx supabase db push` con las credenciales reales) antes de considerar
+esta ronda funcionando en producción. Todo lo que no dependía de estas
+tres migraciones (P1-7 lista de llegadas, P1-8 completo, P1-14) se validó
+en vivo contra Hotel Demo real como de costumbre.
 
 ## Convenciones de nombres
 
