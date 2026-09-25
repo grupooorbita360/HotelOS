@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-
+import { headers } from "next/headers";
 /**
  * Decide a dónde va el usuario tras autenticarse:
  *   - plataforma (Órbita 360)        -> /admin
@@ -10,7 +10,7 @@ import { createClient } from "@/lib/supabase/server";
  *   - sin hotel pero con membresía en un hotel suspendido/cancelado -> /suspendido
  *   - resto (sin hotel asignado)     -> /reservaciones (la página muestra el aviso)
  */
-    export async function homeForCurrentUser(): Promise<string> {
+export async function homeForCurrentUser(): Promise<string> {
   const supabase = await createClient();
 
   // order by created_at: mismo criterio determinista que getCurrentUserHotel()
@@ -78,4 +78,29 @@ export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();
   redirect("/login");
+}
+
+/**
+ * Dispara el correo de recovery de contraseña (issue #8). El enlace
+ * aterriza en /auth/confirm (token_hash + type=recovery), que intercambia
+ * el token y manda a /update-password. Respuesta genérica a propósito:
+ * no revelar si el correo existe.
+ */
+export async function requestPasswordReset(formData: FormData) {
+  const email = String(formData.get("email") ?? "").trim();
+  if (!email) {
+    redirect(`/login?error=${encodeURIComponent("Escribe tu correo para restablecer la contraseña.")}`);
+  }
+
+  const origin = (await headers()).get("origin");
+  if (!origin) {
+    redirect(`/login?error=${encodeURIComponent("No se pudo preparar el enlace. Intenta de nuevo.")}`);
+  }
+
+  const supabase = await createClient();
+  await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/confirm`,
+  });
+
+  redirect(`/login?message=${encodeURIComponent("Si el correo existe, te enviamos un enlace para restablecer tu contraseña.")}`);
 }
