@@ -2704,36 +2704,51 @@ creada -- su cache en memoria (`getRackGrid()`, ver sección Rack) expira
 solo, sin paso manual; no se tocó, es el comportamiento ya documentado y
 aceptado para ese cache, no un bug de este punto.
 
-### Migraciones de esta ronda -- pendientes de aplicar contra Supabase real
+### Migraciones de esta ronda -- aplicadas y validadas
 
-**Importante, léase antes de mergear:** `0056_undo_walked.sql`,
-`0057_checkout_marks_room_dirty.sql` y `0058_room_deactivation_estimated_date.sql`
-se escribieron y se razonaron con el mismo rigor que toda migración de
-este proyecto, pero **no se pudieron aplicar ni probar contra Supabase
-real en esta sesión** -- el entorno sólo tenía las API keys de REST
-(anon/service role), sin credencial de conexión directa a Postgres
-(`supabase link`/`db push` piden `supabase login` o
-`SUPABASE_ACCESS_TOKEN`, ninguno disponible). Se confirmó explícitamente
-antes de darlo por imposible (no se asumió): sin token de acceso, sin
-contraseña de base de datos en ningún `.env*`, sin credencial en
-`~/.supabase`.
+`0056_undo_walked.sql`, `0057_checkout_marks_room_dirty.sql` y
+`0058_room_deactivation_estimated_date.sql` no se pudieron aplicar desde
+esta sesión (sin credencial de conexión directa a Postgres en el entorno,
+sólo API keys de REST) -- se le pasó el contenido literal de los tres
+archivos al dueño del producto para correrlos por el SQL Editor de
+Supabase, y confirmó éxito en los tres. Validado en vivo después, contra
+Hotel Demo real, cada punto que había quedado bloqueado:
 
-Esto tiene una consecuencia real y ya confirmada, no hipotética:
-`listRooms()` (`modules/configuracion/queries/rooms.ts`) ahora selecciona
-`estimated_available_at`, columna que 0058 todavía no aplicó -- **hasta
-que se aplique esa migración, `/configuracion?tab=habitaciones` responde
-500** (`42703: column rooms.estimated_available_at does not exist`,
-confirmado en vivo). El resto de la app no se ve afectado: `undo_walked()`
-faltante hace que "Deshacer Walked" falle limpio con el mensaje genérico
-(sin crash, ya probado en vivo con la migración todavía sin aplicar) en
-vez de romper la página, porque ya pasa por el mismo `try/catch` +
-`friendlyErrorMessage()` que protege el resto de Recepción.
+- **`undo_walked()`**: ciclo completo `arrived -> walked -> arrived` vía
+  la UI real (Marcar Walked, luego Deshacer Walked) -- confirmado también
+  contra la base (`status`, `walked_at`, `walked_reason` correctos en cada
+  paso).
+- **`attempt_check_out()` marca sucia**: una habitación marcada limpia a
+  propósito antes de la prueba quedó `is_clean = false` automáticamente
+  justo después de un check-out real vía la UI (cuenta liquidada +
+  activos devueltos primero, para que `check_out_readiness()` no
+  bloqueara) -- sin ningún clic manual de "Marcar sucia".
+- **`deactivate_room()` con fecha estimada**: se desactivó una habitación
+  real con motivo + fecha desde `/configuracion?tab=habitaciones`, y la
+  fila mostró "Fuera de servicio" + motivo + "Regresa el 15 dic 2026" de
+  inmediato; reactivada después para dejar el demo limpio.
 
-Aplicar las tres migraciones (SQL Editor de Supabase o
-`npx supabase db push` con las credenciales reales) antes de considerar
-esta ronda funcionando en producción. Todo lo que no dependía de estas
-tres migraciones (P1-7 lista de llegadas, P1-8 completo, P1-14) se validó
-en vivo contra Hotel Demo real como de costumbre.
+**Bug real encontrado validando el primer punto** (no relacionado con las
+migraciones en sí): `/configuracion?tab=habitaciones` sí cargaba bien tras
+aplicar `0058`, pero desactivar una habitación mostraba "Error
+desconocido" en vez del motivo real (`IMPACT_BLOCKING` en ese primer
+intento, contra una habitación con una asignación activa -- rechazo
+correcto, sólo el mensaje era inútil). Causa: `runOrError()`
+(`src/app/configuracion/actions.ts`) todavía usaba
+`error instanceof Error ? error.message : "Error desconocido"` -- el mismo
+hallazgo ya corregido en Recepción/Reservaciones (P0-1): un
+`PostgrestError` de supabase-js no siempre pasa `instanceof Error` al
+cruzar la frontera de un Server Action. Corregido reusando
+`friendlyErrorMessage()` (`src/lib/friendlyError.ts`, que ya traduce
+`IMPACT_BLOCKING` desde P1-4) -- con una diferencia respecto a como se usa
+en Recepción/Reservaciones: aquí el *fallback* es el mensaje ya extraído
+(`extractMessage()`, exportada para esto), no el genérico. Configuración
+también lanza mensajes en español ya legibles a mano en TypeScript (ej.
+"El IVA debe estar entre 0 y 100.", "Desactivar una habitación requiere un
+motivo.") que no son códigos de Postgres -- enrutarlos por el mismo
+fallback genérico que usa Recepción los habría reemplazado por un mensaje
+menos útil en vez de dejarlos pasar tal cual. Validado con la misma
+habitación reintentando sin conflicto: mensaje de éxito, sin error.
 
 ## Convenciones de nombres
 

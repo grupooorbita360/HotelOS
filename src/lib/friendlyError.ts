@@ -47,7 +47,7 @@ const KNOWN_ERROR_MESSAGES: Record<string, string> = {
   RESERVATION_STAY_NOT_FOUND: "No se encontró la estancia vendida de esa reserva.",
 };
 
-function extractMessage(error: unknown): string {
+export function extractMessage(error: unknown): string {
   // Los errores de Postgres que llegan vía supabase-js (PostgrestError) no
   // siempre pasan `instanceof Error` de forma confiable a través de la
   // frontera de un Server Action -- se probó en vivo (P0-1, HOLD_EXPIRED)

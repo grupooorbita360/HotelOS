@@ -20,6 +20,7 @@ import {
 } from "@/modules/configuracion/actions/policies";
 import { addStaffMember, changeStaffRole, setStaffActive } from "@/modules/configuracion/actions/staff";
 import { createPaymentMethod, setPaymentMethodActive, updateCashSettings } from "@/modules/configuracion/actions/payments";
+import { friendlyErrorMessage, extractMessage } from "@/lib/friendlyError";
 
 function tabUrl(tab: string, extra = "") {
   return `/configuracion?tab=${tab}${extra}`;
@@ -29,8 +30,18 @@ async function runOrError(tab: string, fn: () => Promise<unknown>) {
   try {
     await fn();
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Error desconocido";
-    redirect(tabUrl(tab, `&error=${encodeURIComponent(message)}`));
+    // error instanceof Error no siempre es true para un PostgrestError de
+    // supabase-js que cruza la frontera de un Server Action (mismo hallazgo
+    // ya corregido en friendlyError.ts/P0-1) -- "Error desconocido" no decía
+    // qué pasó realmente (encontrado real verificando P1-12 en vivo:
+    // IMPACT_BLOCKING caía aquí en silencio). A diferencia de Recepción/
+    // Reservaciones (que sólo ven códigos de Postgres), este archivo también
+    // lanza mensajes en español ya legibles a mano (ej. "El IVA debe estar
+    // entre 0 y 100.") -- por eso el fallback de friendlyErrorMessage() es el
+    // mensaje ya extraído, no el genérico: un código conocido se traduce
+    // igual, cualquier otro mensaje pasa tal cual en vez de perderse.
+    const raw = extractMessage(error);
+    redirect(tabUrl(tab, `&error=${encodeURIComponent(friendlyErrorMessage(error, raw))}`));
   }
   revalidatePath("/configuracion");
   redirect(tabUrl(tab));
