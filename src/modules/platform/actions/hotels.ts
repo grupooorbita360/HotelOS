@@ -5,7 +5,7 @@ import { computeZonedEndOfDay, isValidTimezone } from "@/lib/businessDate";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-
+import { headers } from "next/headers";
 type ServerSupabaseClient = Awaited<ReturnType<typeof createClient>>;
 
 /**
@@ -49,9 +49,10 @@ async function findOrInviteOwner(
   if (existing) return { userId: existing, invited: false };
 
   const adminClient = createAdminClient();
-  const { data: invited, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
-    data: fullName ? { full_name: fullName } : undefined,
-  });
+     const { data: invited, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
+     data: fullName ? { full_name: fullName } : undefined,
+     redirectTo: `${(await headers()).get("origin")}/auth/confirm`,
+    });
   if (error) throw inviteFailureMessage(error);
   return { userId: invited.user.id, invited: true };
 }
@@ -291,7 +292,9 @@ export async function resendOwnerInvite(ownerEmail: string) {
 
   const normalizedEmail = ownerEmail.trim().toLowerCase();
   const adminClient = createAdminClient();
-  const { error } = await adminClient.auth.admin.inviteUserByEmail(normalizedEmail, {});
+     const { error } = await adminClient.auth.admin.inviteUserByEmail(normalizedEmail, {
+     redirectTo: `${(await headers()).get("origin")}/auth/confirm`,
+   });
   if (error) {
     if (/already/i.test(error.message ?? "")) {
       throw new Error("Ese correo ya completó su registro: no necesita invitación, puede entrar con su contraseña.");
