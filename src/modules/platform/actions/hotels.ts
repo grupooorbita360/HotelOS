@@ -51,7 +51,7 @@ async function findOrInviteOwner(
   const adminClient = createAdminClient();
      const { data: invited, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
      data: fullName ? { full_name: fullName } : undefined,
-     redirectTo: `${(await headers()).get("origin")}/auth/confirm`,
+     redirectTo: `${(await headers()).get("origin")}/auth/callback`,
     });
   if (error) throw inviteFailureMessage(error);
   return { userId: invited.user.id, invited: true };
@@ -293,7 +293,7 @@ export async function resendOwnerInvite(ownerEmail: string) {
   const normalizedEmail = ownerEmail.trim().toLowerCase();
   const adminClient = createAdminClient();
      const { error } = await adminClient.auth.admin.inviteUserByEmail(normalizedEmail, {
-     redirectTo: `${(await headers()).get("origin")}/auth/confirm`,
+     redirectTo: `${(await headers()).get("origin")}/auth/callback`,
    });
   if (error) {
     if (/already/i.test(error.message ?? "")) {

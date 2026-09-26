@@ -55,12 +55,16 @@ export async function signIn(formData: FormData) {
   redirect(await homeForCurrentUser());
 }
 
-export async function signUp(formData: FormData) {
-  const email = String(formData.get("email") ?? "");
-  const password = String(formData.get("password") ?? "");
+   export async function signUp(formData: FormData) {
+     const email = String(formData.get("email") ?? "");
+     const password = String(formData.get("password") ?? "");
 
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.signUp({ email, password });
+     const supabase = await createClient();
+     const { data, error } = await supabase.auth.signUp({
+       email,
+       password,
+       options: { emailRedirectTo: `${(await headers()).get("origin")}/auth/callback` },
+     });
 
   if (error) {
     redirect(`/login?error=${encodeURIComponent(error.message)}`);
@@ -107,7 +111,7 @@ export async function requestPasswordReset(formData: FormData) {
     { auth: { flowType: "implicit", persistSession: false, autoRefreshToken: false } },
   );
   await mailer.auth.resetPasswordForEmail(email, {
-    redirectTo: `${origin}/auth/confirm`,
+    redirectTo: `${origin}/auth/callback`,
   });
 
   redirect(`/login?message=${encodeURIComponent("Si el correo existe, te enviamos un enlace para restablecer tu contraseña.")}`);
