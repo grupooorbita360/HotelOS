@@ -225,6 +225,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0056_undo_walked.sql` | `undo_walked()` -- deshace `mark_walked()` (0026), regresa la estancia a `arrived` y limpia `walked_at`/`walked_reason` (P1-4, ver "Handoff de demo P1, Tanda 2") |
 | `0057_checkout_marks_room_dirty.sql` | `attempt_check_out()` (recreada sobre 0026) marca `is_clean = false` en la habitación que libera -- puente temporal hasta que exista Housekeeping real (P1-7, ver "Handoff de demo P1, Tanda 2") |
 | `0058_room_deactivation_estimated_date.sql` | `rooms.estimated_available_at`; `deactivate_room()` gana `p_estimated_available_at` opcional (drop + create, cambia la firma), `reactivate_room()` la limpia (P1-12, ver "Handoff de demo P1, Tanda 2") |
+| `0059_timeline_events_platform_admin_insert.sql` | Fix: policy de INSERT de `timeline_events` no dejaba a `platform_admin` registrar `hotel.created` al dar de alta un hotel (no es miembro del hotel nuevo todavía) -- policy paralela `OR is_platform_admin()`. Traída por PR #22 (`fix/timeline-events-rls`); llegó commiteada en la raíz del repo por un rename accidental, reubicada a `supabase/migrations/` en esta rama sin cambio de contenido |
+| `0060_hold_duration_and_expiring_priority.sql` | `hotel_policies.hold_duration_minutes` (default 120, reemplaza el placeholder nunca implementado en `extra_settings` que ya mencionaba el comentario original de `0013`); `createHoldFromQuoteOption()` lo lee cuando no se pasa `holdMinutes` explícito; regla nueva del Motor de Prioridades `HOLD_EXPIRING_SOON` + evaluador `holdExpiringSoonEvaluator()` (P2-2) |
 
 **Nota sobre el hueco en 0049 y la reconciliación de `feature/demo-reset`
 (commit `2ab7580`):** `feature/demo-reset` es una rama remota que se
@@ -2756,6 +2758,73 @@ principal (`claude/practical-meitner-ftyx8d`) — nunca asumir un número
 "reservado" o mencionado en conversaciones previas: esos acuerdos quedan
 obsoletos en cuanto otra sesión mergea primero (pasó con 0051→0055).
 Procedimiento: listar el directorio, tomar el máximo, usar máximo+1.
+
+## Caja (0046): reconciliación previa a la primera aplicación + fix real
+
+Antes de aplicar `0046_caja_module.sql` por primera vez (nunca se había
+aplicado a Supabase, aunque el código TypeScript de `src/modules/caja/*`
+ya estaba escrito contra su firma) se reconcilió contra todo lo construido
+después: fuente única de precio (0047/0048), P0-3 (`change_room_with_authorization()`)
+y P0-7 (descuentos/cortesía). Conclusión: 0046 nunca toca precio/cotización
+-- consume `reservation_stays.rate_total` (ya derivado de `quote_options.total`
+desde 0047), no compite con esa fuente única. `hotels.moneda_base` seguía
+sin existir por ningún otro camino (confirmado contra la API REST real:
+`column hotels.moneda_base does not exist`) -- sigue pendiente, sin tocar
+por decisión explícita (se queda hardcodeada en `'MXN'` por ahora).
+
+**Bug real encontrado en la reconciliación, corregido antes de aplicar:**
+`handle_cash_stay_transaction()` (el trigger que alimenta `cash_movements`
+desde `stay_transactions` en efectivo) comparaba `new.method <> 'cash'` sin
+considerar `NULL` -- `NULL <> 'cash'` evalúa a `NULL`, y un `IF` con
+condición `NULL` en plpgsql se trata como `FALSE` (no corta temprano). La
+compensación de downgrade de `change_room_with_authorization()` (0051)
+manda `p_method = null` a propósito ("no hubo instrumento de pago real") --
+sin el fix, esa fila caía de largo y se registraba como `cash_movements`
+real, inflando `EfectivoEsperado` con dinero que nunca fue efectivo. El
+cargo de upgrade (mismo archivo) nunca tuvo el problema: es `type = 'charge'`,
+excluido por la otra mitad del `OR` sin importar el `method`. Corregido
+agregando `new.method is null or` al inicio de la condición. Aplicada y
+validada contra Hotel Demo real -- ver caso de prueba abajo.
+
+## P2 — propuestas aprobadas (P2-2, P2-3, P2-1)
+
+Tres propuestas de mínima complejidad, revisadas y aprobadas por el dueño
+del producto antes de implementarse (nunca se construyó nada sin esa
+aprobación explícita, incluida la elección entre alternativas que cada
+propuesta dejaba abiertas). Implementadas en orden P2-2 → P2-3 → P2-1 (del
+más chico al más grande, el que toca el cálculo central de precio al
+final), con prueba obligatoria contra Hotel Demo real antes de pasar al
+siguiente.
+
+### P2-2: Hold configurable por hotel + prioridad de Hold por expirar
+
+Extensión de lo que ya existía, no un mecanismo nuevo (confirmado antes de
+proponerlo): `attempt_inventory_hold()` (0016) ya aceptaba `p_hold_minutes`
+(default 24h si no se mandaba) y `createHoldFromQuoteOption()` (TS) ya
+tenía el parámetro listo -- ningún caller real lo pasaba nunca.
+`hotel_policies.hold_duration_minutes` (0060, default 120) es la política
+por hotel; `createHoldFromQuoteOption()` la lee cuando el caller no manda
+un valor explícito. Editable desde Configuración → Políticas del hotel →
+"Reservaciones y garantía" (mismo card que IVA), porque "configurable por
+hotel" del pedido original exige alguna forma de cambiarlo, no sólo la
+columna.
+
+El comentario original de `inventory_holds.expires_at` (0013) ya
+anticipaba `hotel_policies.extra_settings.hold_duration_minutes` como el
+lugar correcto para esto -- nunca se implementó (ningún código llegó a
+leer/escribir esa ruta). Se promovió directo a columna real en vez de
+JSONB, por la propia regla de este documento ("si una política se vuelve
+importante/consultada seguido, prométela a columna real") -- se consulta
+en cada creación de Hold.
+
+"Avisa al hotel" (el tercer requisito del pedido original) se resolvió
+reusando el Motor de Prioridades que ya existe, en vez de construir un
+canal de notificación nuevo (push/email/WhatsApp sigue fuera de alcance):
+`HOLD_EXPIRING_SOON` es la segunda regla vertical del motor (después de
+`ARRIVAL_NOT_REGISTERED`, 0036) -- `holdExpiringSoonEvaluator()`
+(`src/modules/priorities/evaluators/holdExpiringSoon.ts`) detecta Holds
+activos con menos de 15 minutos para expirar, registrado en el mapa de
+`engine.ts` igual que cualquier otro evaluador.
 
 ## Convenciones de nombres
 
