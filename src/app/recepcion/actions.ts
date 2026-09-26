@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import {
   registerArrival,
   checkIn,
@@ -30,13 +31,36 @@ function stayUrl(stayId: string, extra = "") {
   return `/recepcion?stayId=${stayId}${extra}`;
 }
 
+/**
+ * Bug real (encontrado probando P2-3, mismo patrón ya documentado para
+ * Configuración/selector de hotel en CLAUDE.md): TODAS las acciones de este
+ * archivo pasan por runOrError() sin un tercer argumento -- ninguna
+ * distingue su URL de éxito con un parámetro propio (a diferencia de
+ * `checkinStep`/`roomChangeStep`, que sólo cambian por navegación <Link>,
+ * nunca como redirect de éxito de una mutación) -- así que TODAS redirigen
+ * a la MISMA URL exacta de la que partieron. Confirmado en vivo: incluso
+ * con `revalidatePath("/recepcion")`, el Client Router Cache del navegador
+ * seguía sirviendo el RSC ya prefetcheado de esa URL exacta en vez de pedir
+ * un render fresco -- la base de datos quedaba correcta (confirmado
+ * directo contra Supabase entre cada paso) pero la UI mostraba el estado
+ * anterior hasta una navegación genuinamente distinta. Mismo síntoma que ya
+ * cerró el bug de Configuración y el del selector de hotel; ahí
+ * `revalidatePath()` solo no bastó para el selector de hotel tampoco, y la
+ * solución fue la misma: un parámetro que cambia en cada redirect de éxito
+ * (`?hotelSwitchedAt=`/`?localeChangedAt=`) para forzar al navegador a
+ * tratarlo como una URL distinta. Se aplica aquí una sola vez, en el punto
+ * único de redirect de éxito de runOrError() -- cubre las ~20 acciones de
+ * este archivo (check-in, entrega, no-show, walked, pagos, y las nuevas de
+ * P2-3) sin tocar cada una por separado.
+ */
 async function runOrError(stayId: string, fn: () => Promise<unknown>, redirectExtra = "") {
   try {
     await fn();
   } catch (error) {
     redirect(stayUrl(stayId, `&error=${encodeURIComponent(friendlyErrorMessage(error))}`));
   }
-  redirect(stayUrl(stayId, redirectExtra));
+  revalidatePath("/recepcion");
+  redirect(stayUrl(stayId, `${redirectExtra}&actionAt=${Date.now()}`));
 }
 
 export async function submitRegisterArrival(formData: FormData) {

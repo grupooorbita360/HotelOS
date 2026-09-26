@@ -3015,17 +3015,119 @@ la versión de 0055 -- mismo criterio ya usado en 0053/0054/0055: no se
 puede insertar dos líneas en medio de una función ya aplicada sin repetir
 el cuerpo entero.
 
-**Pendiente de validar en vivo** (ver reporte de esta ronda): esta sesión
-no tiene credencial de conexión directa a Postgres -- igual que
-`0056`-`0058`, la migración se le pasó al dueño del producto para
-aplicarla por el SQL Editor de Supabase. Una vez aplicada, la prueba
-pendiente es exactamente la que motivó el fix: llamar `reset_demo_hotel()`
-con los movimientos de Caja reales de esta sesión todavía presentes (turno
-abierto, cobros divididos, ajustes) y confirmar que corre limpio sin el
-error de foreign key, que `cash_movements`/`cash_shifts` del hotel demo
-quedan en cero filas después (sin huérfanos), y que `payment_methods` (los
-2 métodos sembrados por hotel) sobrevive intacto por ser config que este
-wipe no toca.
+**Validado en vivo contra Supabase real** (esta sesión no tiene credencial
+de conexión directa a Postgres -- igual que `0056`-`0058`, la migración se
+le pasó al dueño del producto para aplicarla por el SQL Editor de
+Supabase; confirmó éxito). Con los movimientos de Caja reales de esta
+misma sesión todavía presentes (1 turno cerrado, 2 `cash_movements`, 136
+`stay_transactions`) se llamó `reset_demo_hotel()` -- corrió limpio, sin
+el error de foreign key (`hotel_id`/`reservations_created`/
+`transactions_created`/`timeline_events_created` regresados con normalidad
+en el JSON de resumen). Confirmado además, contra la API REST real
+después del reset: `cash_movements`/`cash_shifts` del hotel demo quedaron
+en **cero filas** (sin huérfanos); `payment_methods` (`Tarjeta`,
+`Transferencia`, y `Efectivo` -- este último agregado manualmente esta
+sesión, no por el seed) y `cash_settings` sobrevivieron intactos, tal como
+se esperaba de config que este wipe no toca. Repetido dos veces más
+durante la ronda de pruebas de P2-3 (ver esa sección) sin ninguna
+regresión.
+
+### P2-3: enrutamiento mínimo de solicitudes/incidencias (0061)
+
+Housekeeping/Mantenimiento no existen como módulos reales todavía -- P2-3
+no los construye, sólo agrega la etiqueta de triage mínima que
+`guest_requests`/`stay_incidents` (0025) necesitaban para que alguien
+supiera A QUIÉN le toca atender algo, sin inventar un módulo completo.
+`0061_service_item_routing.sql` agrega `assigned_area`
+(`housekeeping`/`maintenance`) + `assigned_to` (uuid, informativo, sin
+validar pertenencia -- no hay rol/módulo real de Housekeeping/Mantenimiento
+contra el cual validar) a ambas tablas, y amplía sus catálogos de `status`
+cerrados por `pg_constraint` (mismo patrón 0033/0046): `guest_requests`
+gana `assigned`; `stay_incidents` gana `assigned` e `in_progress` (ya
+tenía sólo `open`/`resolved`). Sin cambios de RLS: las políticas
+existentes de 0025 ya cubren cualquier columna nueva de la misma tabla.
+
+`assignGuestRequest()`/`assignStayIncident()`
+(`src/modules/recepcion/actions/service.ts`) sólo suben `status` a
+`assigned` si sigue en `open` -- reasignar de área/persona una solicitud
+ya `in_progress` no la regresa de estado. `startGuestRequestProgress()`/
+`startStayIncidentProgress()` aceptan `open` o `assigned` como origen
+(`.in("status", ["open", "assigned"])`). Resolver (`resolveGuestRequest()`/
+`resolveStayIncident()`, sin cambios desde 0025) sigue siendo el único
+camino a un estado terminal, sin importar el área asignada. Mismo permiso
+que crear (`checkin.perform`) para asignar/marcar en curso -- asignar es
+triage, no la resolución final.
+
+`listOpenGuestRequests()`/`listOpenIncidents()`
+(`src/modules/recepcion/queries/stays.ts`) son consultas nuevas, a nivel
+hotel (no por estancia), con un embed de 3 niveles
+(`stays(reservation_stays(reservations(primary_guest_name)))`) para
+resolver el nombre del huésped sin una consulta aparte -- mismo patrón que
+`holdExpiringSoonEvaluator()` (P2-2). `/recepcion` gana una sección nueva
+("Solicitudes e incidencias abiertas del hotel") arriba de la barra de
+KPIs, con controles de asignar/marcar en curso inline -- resolver sigue
+siendo sólo desde el detalle de la estancia, ya construido. Las dos
+tarjetas existentes ("Solicitudes del huésped"/"Incidencias" en el detalle
+de una estancia) ganan los mismos controles. `ServiceItemStatusBadge`
+(`src/components/ui/Badge.tsx`) es el badge nuevo (Nueva/Asignada/En
+curso/Completada/Resuelta/Cancelada), mismo patrón que los demás badges
+del proyecto (mapa de estado -> {label, tone}, nunca el string crudo).
+
+#### Bug real, sistémico, encontrado validando P2-3 en vivo: `runOrError()` de Recepción nunca invalidaba el Client Router Cache
+
+Probar P2-3 en vivo exigía encadenar varias acciones seguidas sobre la
+misma estancia sin recargar la página a mano (asignar → marcar en curso →
+resolver) -- exactamente el tipo de prueba "clics sucesivos en la misma
+sesión" que ya destapó el bug de caché de Configuración (ver esa sección)
+y el del selector de hotel (ver "Resolución del hotel actual"). Aplicado
+aquí, expuso el mismo síntoma en un tercer lugar del proyecto: cada
+acción mutante de `/recepcion` (`registerArrival`, `checkIn`,
+`assignRoomForCheckin`, `deliverRoom`, `markNoShow`, `markWalked`,
+`undoWalked`, `attemptCheckOut`, `registerStayTransaction`,
+`voidStayTransaction`, `setDeliveredAsset`, y las 6 nuevas de P2-3 --
+prácticamente **todo** `src/app/recepcion/actions.ts`) pasa por el mismo
+`runOrError()`, y **ninguna** de sus ~20 llamadas pasaba un tercer
+argumento (`redirectExtra`) que distinguiera su URL de éxito -- todas
+redirigen a la MISMA `/recepcion?stayId=X` exacta de la que partieron
+(`checkinStep`/`roomChangeStep` sólo cambian por navegación `<Link>`
+explícita, nunca como redirect de éxito de una mutación). Esto llevaba
+ahí, sin detectarse, desde `0025` (el primer archivo de acciones de
+Recepción) -- ninguna sesión anterior lo había encontrado porque sus
+pruebas en vivo, aunque exhaustivas, siempre intercalaban una navegación
+fresca (`page.goto()`) entre verificaciones, lo que por sí solo invalida
+cualquier entrada de caché, igual que ya advirtió la lección de
+Configuración ("esto sólo se detecta probando clics repetidos... ni una
+sola verificación con Playwright sin repetir la acción lo revela").
+
+Confirmado con el mismo rigor que los otros dos casos: cada mutación
+dejaba la fila correcta en Supabase de inmediato (verificado por REST
+directo entre cada paso de la UI), pero el HTML servido de vuelta al
+navegador seguía mostrando el estado anterior hasta una navegación
+genuinamente distinta -- la base de datos nunca estuvo mal, sólo la UI se
+quedaba atrás.
+
+**Corrección, en el único punto de redirect de éxito de `runOrError()`**
+(cubre las ~20 acciones de una sola vez, sin tocar cada una por separado):
+se agregó `revalidatePath("/recepcion")` -- necesario pero **no
+suficiente por sí solo**, confirmado en vivo -- y, siguiendo el mismo
+patrón que ya cerró el bug del selector de hotel
+(`?hotelSwitchedAt=`/`?localeChangedAt=`), un parámetro que cambia en cada
+redirect de éxito (`&actionAt=<timestamp>`) para forzar al navegador a
+tratar el destino como una URL genuinamente distinta en vez de servir el
+RSC ya prefetcheado de la URL exacta de origen.
+
+**Validado en vivo, encadenando acciones reales sin recargar a mano**
+(Playwright, con verificación directa contra Supabase entre cada paso, no
+sólo texto de la página): ciclo completo de una incidencia
+(`open → assigned → maintenance → in_progress → resolved`) y de una
+solicitud (`open → assigned → housekeeping → in_progress → completed`),
+cada transición reflejada de inmediato tanto en la sección "Solicitudes e
+incidencias abiertas del hotel" como en las tarjetas de detalle de la
+estancia, sin necesidad de una navegación fresca entre pasos -- antes del
+fix, cada paso quedaba visualmente un clic atrasado, igual que el bug ya
+documentado de Configuración. `reset_demo_hotel()` se usó varias veces
+durante esta ronda para partir de un estado limpio en cada prueba, sin
+ningún problema (ver validación de `0062` arriba).
 
 ## Convenciones de nombres
 
