@@ -2786,6 +2786,23 @@ excluido por la otra mitad del `OR` sin importar el `method`. Corregido
 agregando `new.method is null or` al inicio de la condición. Aplicada y
 validada contra Hotel Demo real -- ver caso de prueba abajo.
 
+**Validado en vivo contra Hotel Demo real** (`reset_demo_hotel()` antes de
+probar), turno de caja abierto de por medio: (A) un pago real en efectivo
+(`register_stay_transaction()`, `method='cash'`) sí generó su
+`cash_movements` (`cash_in $100`) -- control positivo, el trigger sigue
+funcionando para el caso real. (B) un downgrade con compensación de $200
+vía `change_room_with_authorization()` (`method=null`) bajó
+`stay_accounts.balance` en exactamente $200 y **no generó ningún
+`cash_movements` nuevo** -- el turno siguió con la única fila del punto
+(A), confirmando el fix. (C) flujo completo de Caja: turno abierto con
+$1,000 de fondo, un cobro real (`register_payment_with_movements()`)
+dividido $2,000 tarjeta + $1,000 efectivo generó 2 `payment_movements`
+correctos y **sólo** un `cash_movements` por la porción en efectivo
+($1,000, nunca por la de tarjeta); al cerrar el turno contando $2,050,
+`efectivo_esperado` calculó $2,100 exacto (`$1,000 fondo + $100 + $1,000
+cash_in`) y `diferencia = -$50`, ambos derivados correctamente por
+`close_cash_shift()`.
+
 ## P2 — propuestas aprobadas (P2-2, P2-3, P2-1)
 
 Tres propuestas de mínima complejidad, revisadas y aprobadas por el dueño
@@ -2825,6 +2842,37 @@ canal de notificación nuevo (push/email/WhatsApp sigue fuera de alcance):
 (`src/modules/priorities/evaluators/holdExpiringSoon.ts`) detecta Holds
 activos con menos de 15 minutos para expirar, registrado en el mapa de
 `engine.ts` igual que cualquier otro evaluador.
+
+**Hallazgo real, no introducido por esta ronda:** `evaluateHotelRules()`
+(el orquestador del Motor de Prioridades, existente desde 0036) **no tiene
+ningún punto de invocación real en la app** -- confirmado con `grep` en
+todo `src/app/`: ninguna página ni Server Action lo llama, y no existe
+pantalla que liste `hotel_priorities` (ni siquiera para
+`ARRIVAL_NOT_REGISTERED`, la primera regla). Es infraestructura completa
+(esquema, funciones, evaluadores, motor) sin un disparador todavía --
+coherente con que "Mi Hotel Hoy"/Radar 360 (donde se esperaría verlas)
+siguen fuera de alcance. No se corrige aquí (no se pidió, y agregar un
+punto de invocación es una decisión de producto -- ¿cron? ¿al cargar una
+página? ¿botón manual?) -- se documenta para que ninguna sesión futura
+asuma que ya está conectado.
+
+**Validado en vivo contra Hotel Demo real** por eso a nivel de pieza, no de
+UI (no hay UI que probar todavía): (1) `createHoldFromQuoteOption()` vía el
+flujo real de `/reservaciones` (Playwright, login real, buscar → cotizar →
+crear Hold) dejó un Hold con `expires_at - created_at = 120.0 minutos`
+exacto, igual a `hotel_policies.hold_duration_minutes` -- antes de este fix
+habría sido 1440 (24h). (2) La consulta exacta de
+`holdExpiringSoonEvaluator()` (mismo `select` con el embed de 3 niveles
+`quote_options(quotes(leads(guest_name)))`), ejecutada contra ese mismo
+Hold con `expires_at` forzado a 10 minutos en el futuro, devolvió la fila
+esperada con el nombre del huésped resuelto correctamente a través del
+embed. (3) `upsert_hotel_priority()` con los parámetros que ese evaluador
+generaría creó la prioridad con `severity='medium'`, `priority_score=30`
+(`20` de `medium` + `10` de `priority_weight`, fórmula de 0037) y
+`category`/`source_module='reservations'` -- todo derivado correctamente
+de `hotel_rules`, visible por RLS al usuario del hotel. Hold liberado y
+prioridad descartada (`dismiss_hotel_priority()`, motivo explícito) al
+terminar, para no dejar el demo con datos sintéticos activos.
 
 ## Convenciones de nombres
 
