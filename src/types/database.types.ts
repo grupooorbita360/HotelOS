@@ -1218,6 +1218,8 @@ export interface Database {
           stay_id: string;
           description: string;
           status: string;
+          assigned_area: string | null;
+          assigned_to: string | null;
           resolved_at: string | null;
           created_at: string;
           created_by: string | null;
@@ -1229,11 +1231,21 @@ export interface Database {
           stay_id: string;
           description: string;
           status?: string;
+          assigned_area?: string | null;
+          assigned_to?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["guest_requests"]["Insert"]> & {
           resolved_at?: string | null;
         };
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "guest_requests_stay_id_fkey";
+            columns: ["stay_id"];
+            isOneToOne: false;
+            referencedRelation: "stays";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       stay_incidents: {
         Row: {
@@ -1245,6 +1257,8 @@ export interface Database {
           severity: string;
           description: string;
           status: string;
+          assigned_area: string | null;
+          assigned_to: string | null;
           resolved_at: string | null;
           created_at: string;
           created_by: string | null;
@@ -1259,11 +1273,21 @@ export interface Database {
           severity?: string;
           description: string;
           status?: string;
+          assigned_area?: string | null;
+          assigned_to?: string | null;
         };
         Update: Partial<Database["public"]["Tables"]["stay_incidents"]["Insert"]> & {
           resolved_at?: string | null;
         };
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "stay_incidents_stay_id_fkey";
+            columns: ["stay_id"];
+            isOneToOne: false;
+            referencedRelation: "stays";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       delivered_assets: {
         Row: {

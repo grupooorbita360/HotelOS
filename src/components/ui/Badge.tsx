@@ -70,6 +70,24 @@ export function StayStatusBadge({ status }: { status: string }) {
   return <Badge tone={s.tone}>{s.label}</Badge>;
 }
 
+// P2-3 (enrutamiento de solicitudes/incidencias): mismo catálogo de status
+// para guest_requests/stay_incidents excepto en sus dos terminales
+// distintos (completed/cancelled vs. resolved) -- un solo mapa cubre
+// ambos, la clave que no aplica a una tabla simplemente nunca aparece ahí.
+const SERVICE_ITEM_STATUS: Record<string, { label: string; tone: keyof typeof TONES }> = {
+  open: { label: "Nueva", tone: "neutral" },
+  assigned: { label: "Asignada", tone: "info" },
+  in_progress: { label: "En curso", tone: "warning" },
+  completed: { label: "Completada", tone: "success" },
+  resolved: { label: "Resuelta", tone: "success" },
+  cancelled: { label: "Cancelada", tone: "neutral" },
+};
+
+export function ServiceItemStatusBadge({ status }: { status: string }) {
+  const s = SERVICE_ITEM_STATUS[status] ?? { label: status, tone: "neutral" as const };
+  return <Badge tone={s.tone}>{s.label}</Badge>;
+}
+
 const NEXT_ACTION_LABEL: Record<string, string> = {
   registrar_llegada: "Registrar llegada",
   hacer_checkin: "Hacer check-in",

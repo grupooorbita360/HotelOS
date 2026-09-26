@@ -35,6 +35,62 @@ export async function resolveGuestRequest(hotelId: string, requestId: string, st
   await logTimelineEvent({ hotelId, module: "front_desk", eventType: "guest_request.resolved", entityType: "stay", entityId: stayId });
 }
 
+/**
+ * Enrutamiento minimo a Housekeeping/Mantenimiento (P2-3): Housekeeping/
+ * Mantenimiento no existen como modulos/roles reales todavia, asi que
+ * assignedArea es solo una etiqueta de triage -- no hay a quien validar
+ * pertenencia. Mismo permiso que crear (checkin.perform): asignar es
+ * triage, no la resolucion final (que sigue igual que antes). Sube
+ * status a 'assigned' sólo si sigue en 'open' -- reasignar de area/persona
+ * una solicitud que ya está 'in_progress' no la regresa de estado.
+ */
+export async function assignGuestRequest(
+  hotelId: string,
+  requestId: string,
+  stayId: string,
+  assignedArea: "housekeeping" | "maintenance",
+  assignedTo?: string,
+) {
+  await requirePermission(hotelId, "checkin.perform");
+  const supabase = await createClient();
+  const { data: current, error: currentError } = await supabase
+    .from("guest_requests")
+    .select("status")
+    .eq("id", requestId)
+    .single();
+  if (currentError) throw currentError;
+
+  const { error } = await supabase
+    .from("guest_requests")
+    .update({
+      assigned_area: assignedArea,
+      assigned_to: assignedTo ?? null,
+      status: current.status === "open" ? "assigned" : current.status,
+    })
+    .eq("id", requestId);
+  if (error) throw error;
+  await logTimelineEvent({
+    hotelId,
+    module: "front_desk",
+    eventType: "guest_request.assigned",
+    entityType: "stay",
+    entityId: stayId,
+    payload: { request_id: requestId, assigned_area: assignedArea, assigned_to: assignedTo ?? null },
+  });
+}
+
+export async function startGuestRequestProgress(hotelId: string, requestId: string, stayId: string) {
+  await requirePermission(hotelId, "checkin.perform");
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("guest_requests")
+    .update({ status: "in_progress" })
+    .eq("id", requestId)
+    .in("status", ["open", "assigned"]);
+  if (error) throw error;
+  await logTimelineEvent({ hotelId, module: "front_desk", eventType: "guest_request.progress_started", entityType: "stay", entityId: stayId });
+}
+
 export async function createStayIncident(
   hotelId: string,
   stayId: string,
@@ -63,6 +119,54 @@ export async function resolveStayIncident(hotelId: string, incidentId: string, s
     .eq("id", incidentId);
   if (error) throw error;
   await logTimelineEvent({ hotelId, module: "front_desk", eventType: "stay_incident.resolved", entityType: "stay", entityId: stayId });
+}
+
+/** Mismo criterio que assignGuestRequest() -- ver comentario ahí (P2-3). */
+export async function assignStayIncident(
+  hotelId: string,
+  incidentId: string,
+  stayId: string,
+  assignedArea: "housekeeping" | "maintenance",
+  assignedTo?: string,
+) {
+  await requirePermission(hotelId, "checkin.perform");
+  const supabase = await createClient();
+  const { data: current, error: currentError } = await supabase
+    .from("stay_incidents")
+    .select("status")
+    .eq("id", incidentId)
+    .single();
+  if (currentError) throw currentError;
+
+  const { error } = await supabase
+    .from("stay_incidents")
+    .update({
+      assigned_area: assignedArea,
+      assigned_to: assignedTo ?? null,
+      status: current.status === "open" ? "assigned" : current.status,
+    })
+    .eq("id", incidentId);
+  if (error) throw error;
+  await logTimelineEvent({
+    hotelId,
+    module: "front_desk",
+    eventType: "stay_incident.assigned",
+    entityType: "stay",
+    entityId: stayId,
+    payload: { incident_id: incidentId, assigned_area: assignedArea, assigned_to: assignedTo ?? null },
+  });
+}
+
+export async function startStayIncidentProgress(hotelId: string, incidentId: string, stayId: string) {
+  await requirePermission(hotelId, "checkin.perform");
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("stay_incidents")
+    .update({ status: "in_progress" })
+    .eq("id", incidentId)
+    .in("status", ["open", "assigned"]);
+  if (error) throw error;
+  await logTimelineEvent({ hotelId, module: "front_desk", eventType: "stay_incident.progress_started", entityType: "stay", entityId: stayId });
 }
 
 export async function setDeliveredAsset(

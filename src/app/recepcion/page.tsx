@@ -11,6 +11,8 @@ import {
   listRoomChangeOptions,
   getHotelCheckinAssets,
   getRoomTypeHousekeepingSummary,
+  listOpenGuestRequests,
+  listOpenIncidents,
 } from "@/modules/recepcion/queries/stays";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { Field, TextInput, Select } from "@/components/ui/Field";
@@ -18,7 +20,7 @@ import { Button } from "@/components/ui/Button";
 import { Banner } from "@/components/ui/Banner";
 import { Badge } from "@/components/ui/Badge";
 import { KpiCard } from "@/components/ui/KpiCard";
-import { StayStatusBadge, nextActionLabel } from "@/components/ui/Badge";
+import { StayStatusBadge, nextActionLabel, ServiceItemStatusBadge } from "@/components/ui/Badge";
 import { AppShell } from "@/components/ui/AppShell";
 import {
   submitRegisterArrival,
@@ -33,8 +35,12 @@ import {
   submitVoidTransaction,
   submitCreateGuestRequest,
   submitResolveGuestRequest,
+  submitAssignGuestRequest,
+  submitStartGuestRequestProgress,
   submitCreateIncident,
   submitResolveIncident,
+  submitAssignIncident,
+  submitStartIncidentProgress,
   submitSetAsset,
   submitChangeRoom,
 } from "./actions";
@@ -101,6 +107,11 @@ export default async function RecepcionPage({
   // P1-7 (handoff de demo P1 Tanda 2): una sola pasada para todo el hotel,
   // reusada por cada fila de la lista -- no una consulta por llegada.
   const housekeepingByRoomType = await getRoomTypeHousekeepingSummary(hotel.hotelId);
+  // P2-3 (enrutamiento de solicitudes/incidencias): a nivel hotel, no por
+  // estancia -- lo que hace falta para que Recepción/Gerencia vean todo lo
+  // abierto sin entrar estancia por estancia.
+  const openGuestRequests = await listOpenGuestRequests(hotel.hotelId);
+  const openIncidents = await listOpenIncidents(hotel.hotelId);
   const counts = {
     expected: allStays.filter((s) => s.status === "expected").length,
     inHouse: allStays.filter((s) => s.status === "in_house").length,
@@ -228,6 +239,107 @@ export default async function RecepcionPage({
         </div>
 
         {params.error && <Banner tone="danger">{params.error}</Banner>}
+
+        {/* P2-3 (enrutamiento de solicitudes/incidencias): vista a nivel
+            hotel, para que Recepción/Gerencia vean todo lo abierto sin
+            entrar estancia por estancia. Sólo enruta (asignar área +
+            marcar en curso) -- resolver sigue siendo desde el detalle de
+            la estancia, ya construido. */}
+        {(openGuestRequests.length > 0 || openIncidents.length > 0) && (
+          <Card className="space-y-3">
+            <CardTitle>
+              Solicitudes e incidencias abiertas del hotel ({openGuestRequests.length + openIncidents.length})
+            </CardTitle>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase text-muted">Solicitudes ({openGuestRequests.length})</p>
+                {openGuestRequests.length === 0 && <p className="text-muted">Ninguna abierta.</p>}
+                {openGuestRequests.map((r) => (
+                  <div key={r.id} className="space-y-1 rounded-lg bg-brand-soft p-2">
+                    <div className="flex items-center justify-between">
+                      <Link href={`/recepcion?stayId=${r.stayId}`} className="font-medium hover:underline">
+                        {r.guestName}
+                      </Link>
+                      <ServiceItemStatusBadge status={r.status} />
+                    </div>
+                    <p>{r.description}</p>
+                    {r.assignedArea ? (
+                      <div className="flex items-center justify-between text-xs text-muted">
+                        <span>→ {r.assignedArea === "housekeeping" ? "Housekeeping" : "Mantenimiento"}</span>
+                        {r.status !== "in_progress" && (
+                          <form action={submitStartGuestRequestProgress}>
+                            <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                            <input type="hidden" name="stayId" value={r.stayId} />
+                            <input type="hidden" name="requestId" value={r.id} />
+                            <Button variant="ghost" className="text-xs">
+                              marcar en curso
+                            </Button>
+                          </form>
+                        )}
+                      </div>
+                    ) : (
+                      <form action={submitAssignGuestRequest} className="flex items-center gap-2">
+                        <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                        <input type="hidden" name="stayId" value={r.stayId} />
+                        <input type="hidden" name="requestId" value={r.id} />
+                        <Select name="assignedArea" defaultValue="housekeeping" className="flex-1 text-xs">
+                          <option value="housekeeping">Housekeeping</option>
+                          <option value="maintenance">Mantenimiento</option>
+                        </Select>
+                        <Button variant="ghost" className="text-xs">
+                          enviar
+                        </Button>
+                      </form>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase text-muted">Incidencias ({openIncidents.length})</p>
+                {openIncidents.length === 0 && <p className="text-muted">Ninguna abierta.</p>}
+                {openIncidents.map((i) => (
+                  <div key={i.id} className="space-y-1 rounded-lg bg-warning-soft p-2">
+                    <div className="flex items-center justify-between">
+                      <Link href={`/recepcion?stayId=${i.stayId}`} className="font-medium hover:underline">
+                        {i.guestName}
+                      </Link>
+                      <ServiceItemStatusBadge status={i.status} />
+                    </div>
+                    <p>{i.description}</p>
+                    {i.assignedArea ? (
+                      <div className="flex items-center justify-between text-xs text-muted">
+                        <span>→ {i.assignedArea === "housekeeping" ? "Housekeeping" : "Mantenimiento"}</span>
+                        {i.status !== "in_progress" && (
+                          <form action={submitStartIncidentProgress}>
+                            <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                            <input type="hidden" name="stayId" value={i.stayId} />
+                            <input type="hidden" name="incidentId" value={i.id} />
+                            <Button variant="ghost" className="text-xs">
+                              marcar en curso
+                            </Button>
+                          </form>
+                        )}
+                      </div>
+                    ) : (
+                      <form action={submitAssignIncident} className="flex items-center gap-2">
+                        <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                        <input type="hidden" name="stayId" value={i.stayId} />
+                        <input type="hidden" name="incidentId" value={i.id} />
+                        <Select name="assignedArea" defaultValue="maintenance" className="flex-1 text-xs">
+                          <option value="housekeeping">Housekeeping</option>
+                          <option value="maintenance">Mantenimiento</option>
+                        </Select>
+                        <Button variant="ghost" className="text-xs">
+                          enviar
+                        </Button>
+                      </form>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+        )}
 
         <div className="grid grid-cols-3 gap-6">
           {/* Lista de estancias */}
@@ -763,19 +875,52 @@ export default async function RecepcionPage({
                     </form>
                     <div className="space-y-2">
                       {detail.guestRequests.map((r) => (
-                        <div key={r.id} className="flex items-center justify-between rounded-lg bg-brand-soft p-2">
-                          <span>{r.description}</span>
-                          {r.status !== "completed" ? (
-                            <form action={submitResolveGuestRequest}>
-                              <input type="hidden" name="hotelId" value={hotel.hotelId} />
-                              <input type="hidden" name="stayId" value={detail.stay.id} />
-                              <input type="hidden" name="requestId" value={r.id} />
-                              <Button variant="ghost" className="text-xs">
-                                resolver
-                              </Button>
-                            </form>
-                          ) : (
-                            <span className="text-xs text-muted">resuelta</span>
+                        <div key={r.id} className="space-y-1 rounded-lg bg-brand-soft p-2">
+                          <div className="flex items-center justify-between">
+                            <span>{r.description}</span>
+                            {r.status !== "completed" ? (
+                              <form action={submitResolveGuestRequest}>
+                                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                                <input type="hidden" name="stayId" value={detail.stay.id} />
+                                <input type="hidden" name="requestId" value={r.id} />
+                                <Button variant="ghost" className="text-xs">
+                                  resolver
+                                </Button>
+                              </form>
+                            ) : (
+                              <span className="text-xs text-muted">resuelta</span>
+                            )}
+                          </div>
+                          {/* P2-3 (enrutamiento): asignar area de servicio + marcar en curso -- Housekeeping/Mantenimiento no existen como modulos reales todavia, sólo la etiqueta. */}
+                          {r.status !== "completed" && (
+                            <div className="flex items-center justify-between text-xs text-muted">
+                              {r.assigned_area ? (
+                                <span>→ {r.assigned_area === "housekeeping" ? "Housekeeping" : "Mantenimiento"}</span>
+                              ) : (
+                                <form action={submitAssignGuestRequest} className="flex items-center gap-2">
+                                  <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                                  <input type="hidden" name="stayId" value={detail.stay.id} />
+                                  <input type="hidden" name="requestId" value={r.id} />
+                                  <Select name="assignedArea" defaultValue="housekeeping" className="text-xs">
+                                    <option value="housekeeping">Housekeeping</option>
+                                    <option value="maintenance">Mantenimiento</option>
+                                  </Select>
+                                  <Button variant="ghost" className="text-xs">
+                                    enviar
+                                  </Button>
+                                </form>
+                              )}
+                              {r.assigned_area && r.status !== "in_progress" && (
+                                <form action={submitStartGuestRequestProgress}>
+                                  <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                                  <input type="hidden" name="stayId" value={detail.stay.id} />
+                                  <input type="hidden" name="requestId" value={r.id} />
+                                  <Button variant="ghost" className="text-xs">
+                                    marcar en curso
+                                  </Button>
+                                </form>
+                              )}
+                            </div>
                           )}
                         </div>
                       ))}
@@ -807,21 +952,54 @@ export default async function RecepcionPage({
                     </form>
                     <div className="space-y-2">
                       {detail.incidents.map((i) => (
-                        <div key={i.id} className="flex items-center justify-between rounded-lg bg-warning-soft p-2">
-                          <span>
-                            {i.description} <span className="text-xs text-muted">({i.severity})</span>
-                          </span>
-                          {i.status === "open" ? (
-                            <form action={submitResolveIncident}>
-                              <input type="hidden" name="hotelId" value={hotel.hotelId} />
-                              <input type="hidden" name="stayId" value={detail.stay.id} />
-                              <input type="hidden" name="incidentId" value={i.id} />
-                              <Button variant="ghost" className="text-xs">
-                                resolver
-                              </Button>
-                            </form>
-                          ) : (
-                            <span className="text-xs text-muted">resuelta</span>
+                        <div key={i.id} className="space-y-1 rounded-lg bg-warning-soft p-2">
+                          <div className="flex items-center justify-between">
+                            <span>
+                              {i.description} <span className="text-xs text-muted">({i.severity})</span>
+                            </span>
+                            {i.status !== "resolved" ? (
+                              <form action={submitResolveIncident}>
+                                <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                                <input type="hidden" name="stayId" value={detail.stay.id} />
+                                <input type="hidden" name="incidentId" value={i.id} />
+                                <Button variant="ghost" className="text-xs">
+                                  resolver
+                                </Button>
+                              </form>
+                            ) : (
+                              <span className="text-xs text-muted">resuelta</span>
+                            )}
+                          </div>
+                          {/* P2-3 (enrutamiento): mismo patrón que Solicitudes del huésped. */}
+                          {i.status !== "resolved" && (
+                            <div className="flex items-center justify-between text-xs text-muted">
+                              {i.assigned_area ? (
+                                <span>→ {i.assigned_area === "housekeeping" ? "Housekeeping" : "Mantenimiento"}</span>
+                              ) : (
+                                <form action={submitAssignIncident} className="flex items-center gap-2">
+                                  <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                                  <input type="hidden" name="stayId" value={detail.stay.id} />
+                                  <input type="hidden" name="incidentId" value={i.id} />
+                                  <Select name="assignedArea" defaultValue="maintenance" className="text-xs">
+                                    <option value="housekeeping">Housekeeping</option>
+                                    <option value="maintenance">Mantenimiento</option>
+                                  </Select>
+                                  <Button variant="ghost" className="text-xs">
+                                    enviar
+                                  </Button>
+                                </form>
+                              )}
+                              {i.assigned_area && i.status !== "in_progress" && (
+                                <form action={submitStartIncidentProgress}>
+                                  <input type="hidden" name="hotelId" value={hotel.hotelId} />
+                                  <input type="hidden" name="stayId" value={detail.stay.id} />
+                                  <input type="hidden" name="incidentId" value={i.id} />
+                                  <Button variant="ghost" className="text-xs">
+                                    marcar en curso
+                                  </Button>
+                                </form>
+                              )}
+                            </div>
                           )}
                         </div>
                       ))}

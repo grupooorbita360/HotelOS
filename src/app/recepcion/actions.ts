@@ -16,8 +16,12 @@ import { registerStayTransaction, voidStayTransaction } from "@/modules/recepcio
 import {
   createGuestRequest,
   resolveGuestRequest,
+  assignGuestRequest,
+  startGuestRequestProgress,
   createStayIncident,
   resolveStayIncident,
+  assignStayIncident,
+  startStayIncidentProgress,
   setDeliveredAsset,
 } from "@/modules/recepcion/actions/service";
 import { friendlyErrorMessage } from "@/lib/friendlyError";
@@ -160,6 +164,22 @@ export async function submitResolveGuestRequest(formData: FormData) {
   await runOrError(stayId, () => resolveGuestRequest(hotelId, requestId, stayId));
 }
 
+export async function submitAssignGuestRequest(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const stayId = String(formData.get("stayId"));
+  const requestId = String(formData.get("requestId"));
+  const assignedArea = String(formData.get("assignedArea")) as "housekeeping" | "maintenance";
+  const assignedTo = String(formData.get("assignedTo") || "") || undefined;
+  await runOrError(stayId, () => assignGuestRequest(hotelId, requestId, stayId, assignedArea, assignedTo));
+}
+
+export async function submitStartGuestRequestProgress(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const stayId = String(formData.get("stayId"));
+  const requestId = String(formData.get("requestId"));
+  await runOrError(stayId, () => startGuestRequestProgress(hotelId, requestId, stayId));
+}
+
 export async function submitCreateIncident(formData: FormData) {
   const hotelId = String(formData.get("hotelId"));
   const stayId = String(formData.get("stayId"));
@@ -174,6 +194,22 @@ export async function submitResolveIncident(formData: FormData) {
   const stayId = String(formData.get("stayId"));
   const incidentId = String(formData.get("incidentId"));
   await runOrError(stayId, () => resolveStayIncident(hotelId, incidentId, stayId));
+}
+
+export async function submitAssignIncident(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const stayId = String(formData.get("stayId"));
+  const incidentId = String(formData.get("incidentId"));
+  const assignedArea = String(formData.get("assignedArea")) as "housekeeping" | "maintenance";
+  const assignedTo = String(formData.get("assignedTo") || "") || undefined;
+  await runOrError(stayId, () => assignStayIncident(hotelId, incidentId, stayId, assignedArea, assignedTo));
+}
+
+export async function submitStartIncidentProgress(formData: FormData) {
+  const hotelId = String(formData.get("hotelId"));
+  const stayId = String(formData.get("stayId"));
+  const incidentId = String(formData.get("incidentId"));
+  await runOrError(stayId, () => startStayIncidentProgress(hotelId, incidentId, stayId));
 }
 
 export async function submitSetAsset(formData: FormData) {

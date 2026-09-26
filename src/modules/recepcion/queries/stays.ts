@@ -99,13 +99,13 @@ export async function getStayDetails(hotelId: string, stayId: string) {
 
   const { data: guestRequests } = await supabase
     .from("guest_requests")
-    .select("id, description, status, created_at, resolved_at")
+    .select("id, description, status, assigned_area, assigned_to, created_at, resolved_at")
     .eq("stay_id", stayId)
     .order("created_at", { ascending: false });
 
   const { data: incidents } = await supabase
     .from("stay_incidents")
-    .select("id, type, severity, description, status, created_at, resolved_at")
+    .select("id, type, severity, description, status, assigned_area, assigned_to, created_at, resolved_at")
     .eq("stay_id", stayId)
     .order("created_at", { ascending: false });
 
@@ -318,4 +318,74 @@ export async function getHotelCheckinAssets(hotelId: string) {
     .single();
   if (error) throw error;
   return (data?.checkin_assets as string[] | null) ?? [];
+}
+
+export interface OpenServiceItem {
+  id: string;
+  stayId: string;
+  guestName: string;
+  description: string;
+  status: string;
+  assignedArea: string | null;
+  createdAt: string;
+}
+
+type ServiceItemStayEmbed = {
+  reservation_stays: { reservations: { primary_guest_name: string } | null } | null;
+} | null;
+
+/**
+ * Enrutamiento minimo (P2-3): a diferencia de las listas por estancia que
+ * ya existían (getStayDetails), estas son a nivel HOTEL -- lo que hace
+ * falta para que Recepción/Gerencia vean todo lo abierto sin entrar
+ * estancia por estancia. RLS ya da la visibilidad (cualquier miembro del
+ * hotel ve las filas de su hotel) -- no se agrega ningún permiso nuevo
+ * sólo para leer, mismo criterio que hotel_priorities.
+ */
+export async function listOpenGuestRequests(hotelId: string): Promise<OpenServiceItem[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("guest_requests")
+    .select(
+      `id, stay_id, description, status, assigned_area, created_at,
+       stays(reservation_stays(reservations(primary_guest_name)))`,
+    )
+    .eq("hotel_id", hotelId)
+    .not("status", "in", "(completed,cancelled)")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    stayId: r.stay_id,
+    guestName: (r.stays as unknown as ServiceItemStayEmbed)?.reservation_stays?.reservations?.primary_guest_name ?? "Huésped",
+    description: r.description,
+    status: r.status,
+    assignedArea: r.assigned_area,
+    createdAt: r.created_at,
+  }));
+}
+
+export async function listOpenIncidents(hotelId: string): Promise<OpenServiceItem[]> {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("stay_incidents")
+    .select(
+      `id, stay_id, description, status, assigned_area, created_at,
+       stays(reservation_stays(reservations(primary_guest_name)))`,
+    )
+    .eq("hotel_id", hotelId)
+    .neq("status", "resolved")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    stayId: r.stay_id,
+    guestName: (r.stays as unknown as ServiceItemStayEmbed)?.reservation_stays?.reservations?.primary_guest_name ?? "Huésped",
+    description: r.description,
+    status: r.status,
+    assignedArea: r.assigned_area,
+    createdAt: r.created_at,
+  }));
 }
