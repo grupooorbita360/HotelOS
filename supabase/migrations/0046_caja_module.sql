@@ -439,7 +439,16 @@ declare
   v_usa_turnos boolean;
   v_shift_id uuid;
 begin
-  if new.method <> 'cash' or new.type not in ('payment', 'refund') then
+  -- new.method IS NULL en un stay_transactions 'payment'/'refund' sin
+  -- instrumento de pago real (ej. la compensacion de downgrade de
+  -- change_room_with_authorization(), 0051, que manda p_method = null a
+  -- proposito) -- `NULL <> 'cash'` evalua a NULL, y un IF con condicion
+  -- NULL en plpgsql se trata como FALSE (no hace el `return new` temprano),
+  -- asi que sin este chequeo explicito la fila caia de largo y se
+  -- registraba como cash_movements real, inflando EfectivoEsperado con
+  -- dinero que nunca entro a la caja. Encontrado en la reconciliacion
+  -- previa a aplicar esta migracion (nunca se habia aplicado a Supabase).
+  if new.method is null or new.method <> 'cash' or new.type not in ('payment', 'refund') then
     return new;
   end if;
 
