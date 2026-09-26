@@ -31,10 +31,18 @@ export interface LogTimelineEventInput {
   entityType: string;
   entityId?: string;
   payload?: Record<string, Json>;
+  /**
+   * Cliente ya construido, opcional (P2-2). Un caller que corre dentro de
+   * after() (next/server, ver src/modules/priorities/engine.ts) no puede
+   * llamar createClient() ahí mismo -- cookies() no se puede leer dentro
+   * de ese callback -- así que inyecta el cliente que ya construyó antes.
+   * Todo el resto de callers (la inmensa mayoría) sigue sin pasar nada.
+   */
+  supabaseClient?: Awaited<ReturnType<typeof createClient>>;
 }
 
 export async function logTimelineEvent(input: LogTimelineEventInput) {
-  const supabase = await createClient();
+  const supabase = input.supabaseClient ?? (await createClient());
   const {
     data: { user },
   } = await supabase.auth.getUser();

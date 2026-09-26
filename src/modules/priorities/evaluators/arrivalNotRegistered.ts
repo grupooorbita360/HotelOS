@@ -14,8 +14,12 @@ import type { DetectedOccurrence, EvaluatorContext } from "../types";
  * reservation_stays.check_in -- sin Housekeeping, sin Caja, sin tocar
  * ninguna regla de Reservaciones/Recepción.
  */
-export async function arrivalNotRegisteredEvaluator({ hotelId, businessDate }: EvaluatorContext): Promise<DetectedOccurrence[]> {
-  const supabase = await createClient();
+export async function arrivalNotRegisteredEvaluator({
+  hotelId,
+  businessDate,
+  supabaseClient,
+}: EvaluatorContext): Promise<DetectedOccurrence[]> {
+  const supabase = supabaseClient ?? (await createClient());
 
   const { data: stays, error } = await supabase
     .from("stays")

@@ -1,4 +1,5 @@
 import type { Json } from "@/types/database.types";
+import type { createClient } from "@/lib/supabase/server";
 
 /**
  * Contrato de una ocurrencia detectada por un evaluador de regla. El motor
@@ -26,6 +27,14 @@ export interface EvaluatorContext {
   hotelId: string;
   /** Fecha operativa del hotel (getHotelBusinessDate), nunca UTC crudo. */
   businessDate: string;
+  /**
+   * Cliente de Supabase ya construido, opcional (P2-2). Un evaluador que
+   * corre dentro de after() (next/server, ver engine.ts) no puede llamar
+   * createClient() por su cuenta -- cookies() no se puede leer dentro de
+   * ese callback -- así que engine.ts lo inyecta aquí, ya resuelto fuera
+   * de after(). Si no viene, el evaluador crea el suyo como siempre.
+   */
+  supabaseClient?: Awaited<ReturnType<typeof createClient>>;
 }
 
 /** Un evaluador = una función pura de lectura por rule.code. Nunca SQL dinámico ni código guardado en la base de datos. */

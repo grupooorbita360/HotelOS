@@ -8,9 +8,17 @@ import { computeBusinessDate } from "@/lib/businessDate";
  * hotel en este instante. Nunca calcules "hoy" con `new Date()`/UTC o en
  * el navegador para decisiones operativas (llegadas, salidas, KPIs de
  * Rack, no-shows, etc.) -- usa siempre esta función. Ver CLAUDE.md.
+ *
+ * supabaseClient opcional (P2-2): un caller que corre dentro de after()
+ * (next/server) no puede construir su propio cliente ahí -- cookies() no
+ * se puede leer dentro de ese callback -- así que necesita inyectar uno ya
+ * creado antes. Todo el resto de callers sigue sin pasar nada.
  */
-export async function getHotelBusinessDate(hotelId: string): Promise<string> {
-  const supabase = await createClient();
+export async function getHotelBusinessDate(
+  hotelId: string,
+  supabaseClient?: Awaited<ReturnType<typeof createClient>>,
+): Promise<string> {
+  const supabase = supabaseClient ?? (await createClient());
   const { data, error } = await supabase.from("hotels").select("timezone").eq("id", hotelId).single();
   if (error) throw error;
   return computeBusinessDate(data.timezone);

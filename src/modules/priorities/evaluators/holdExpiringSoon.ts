@@ -12,8 +12,8 @@ const EXPIRING_SOON_MINUTES = 15;
  * se resuelve generando una hotel_priorities, igual que cualquier otra
  * regla del motor -- sin push/email/WhatsApp, fuera de alcance.
  */
-export async function holdExpiringSoonEvaluator({ hotelId }: EvaluatorContext): Promise<DetectedOccurrence[]> {
-  const supabase = await createClient();
+export async function holdExpiringSoonEvaluator({ hotelId, supabaseClient }: EvaluatorContext): Promise<DetectedOccurrence[]> {
+  const supabase = supabaseClient ?? (await createClient());
   const now = new Date();
   const threshold = new Date(now.getTime() + EXPIRING_SOON_MINUTES * 60_000);
 

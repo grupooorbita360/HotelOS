@@ -4,6 +4,7 @@ import { signOut } from "@/app/login/actions";
 import { selectHotel, selectLocale } from "@/lib/auth/actions";
 import { brandStyleVars } from "@/lib/color";
 import { getLocale, shellT } from "@/lib/i18n";
+import { scheduleHotelRuleEvaluation } from "@/modules/priorities/engine";
 
 /**
  * Módulos del menú y la feature de plataforma que los enciende/apaga
@@ -69,6 +70,15 @@ export async function AppShell({
     : MODULES;
   const locale = await getLocale();
   const t = (key: Parameters<typeof shellT>[1]) => shellT(locale, key);
+
+  // P2-2 (Motor de Prioridades, ver CLAUDE.md): único punto de invocación
+  // real de evaluateHotelRules() -- AppShell es el único componente
+  // compartido por las 5 páginas de módulo, así que una regla como
+  // HOLD_EXPIRING_SOON se dispara sin importar en qué pantalla esté el
+  // usuario. scheduleHotelRuleEvaluation() ya trae su propio cooldown en
+  // memoria y corre después de que la respuesta ya se mandó (after()) --
+  // esta llamada nunca añade latencia perceptible a la página.
+  await scheduleHotelRuleEvaluation(hotelId);
 
   return (
     <div className="min-h-screen bg-background" style={brandStyleVars(brandColor)}>

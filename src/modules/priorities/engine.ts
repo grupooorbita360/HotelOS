@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
@@ -33,8 +34,16 @@ export interface RuleEvaluationSummary {
  * registra timeline_events para detecciones/resoluciones genuinamente
  * nuevas, nunca por cada evaluación (principio 12 de la tarea).
  */
-export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluationSummary[]> {
-  const supabase = await createClient();
+export async function evaluateHotelRules(
+  hotelId: string,
+  supabaseClient?: Awaited<ReturnType<typeof createClient>>,
+): Promise<RuleEvaluationSummary[]> {
+  // supabaseClient opcional (P2-2): scheduleHotelRuleEvaluation() lo
+  // construye ANTES de entrar a after() (next/server) y lo inyecta aquí --
+  // cookies() no se puede leer dentro de ese callback, así que createClient()
+  // fallaría si se llamara aquí adentro cuando el caller es after(). Un
+  // caller directo (fuera de after()) sigue sin pasar nada.
+  const supabase = supabaseClient ?? (await createClient());
   // upsert_hotel_priority()/auto_resolve_stale_priorities() (0038) sólo
   // aceptan llamadas de service_role -- son las dos primitivas internas
   // del motor, nunca una API pública de mutación. El resto de esta
@@ -43,7 +52,7 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
   // cambia quién puede disparar la evaluación, sólo con qué credencial
   // sale la escritura final.
   const adminClient = createAdminClient();
-  const businessDate = await getHotelBusinessDate(hotelId);
+  const businessDate = await getHotelBusinessDate(hotelId, supabase);
 
   const { data: rules, error: rulesError } = await supabase
     .from("hotel_rules")
@@ -58,7 +67,7 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
     const evaluator = EVALUATORS[rule.code];
     if (!evaluator) continue; // regla en catálogo sin evaluador implementado todavía
 
-    const occurrences = await evaluator({ hotelId, businessDate });
+    const occurrences = await evaluator({ hotelId, businessDate, supabaseClient: supabase });
     const activeDedupeKeys: string[] = [];
     let newCount = 0;
 
@@ -98,6 +107,7 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
             reference_id: occ.referenceId,
             dedupe_key: occ.dedupeKey,
           },
+          supabaseClient: supabase,
         });
       }
     }
@@ -117,6 +127,7 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
         entityType: "hotel_priority",
         entityId: resolved.out_priority_id,
         payload: { rule_code: rule.code, auto_resolved: true },
+        supabaseClient: supabase,
       });
     }
 
@@ -129,4 +140,55 @@ export async function evaluateHotelRules(hotelId: string): Promise<RuleEvaluatio
   }
 
   return summaries;
+}
+
+/**
+ * Punto único de invocación real del motor (antes no existía ninguno --
+ * ver CLAUDE.md, sección P2-2). AppShell (compartido por las 5 páginas de
+ * módulo) llama a esto en cada request; se decidió evaluar aquí y no por
+ * página para que reglas como HOLD_EXPIRING_SOON se disparen sin importar
+ * en qué pantalla esté el usuario.
+ *
+ * Cooldown en memoria (mismo patrón que el cache de 45s de getRackGrid(),
+ * ver sección Rack de CLAUDE.md): sin esto, cada navegación repetiría la
+ * misma evaluación completa -- desperdicio real de trabajo, no solo de
+ * latencia. Igual que ese cache, esto es un Map por proceso, no
+ * distribuido -- en un despliegue multi-instancia cada instancia evalúa
+ * por su cuenta, lo cual está bien: el peor caso es evaluar de más, nunca
+ * de menos (a diferencia del cache de lectura del Rack, donde servir una
+ * copia vieja sí sería un problema).
+ *
+ * after() (next/server, estable desde Next 15) corre el trabajo real
+ * DESPUÉS de que la respuesta ya se mandó al navegador -- ninguna página
+ * paga la latencia de evaluar todas las reglas del hotel sólo por
+ * cargar. Un error de evaluación nunca debe tumbar el render de la página
+ * que lo disparó (por eso el .catch() en vez de dejar que after() lo
+ * propague sin control).
+ *
+ * Bug real encontrado probando esto contra Supabase real: createClient()
+ * (y por lo tanto getHotelBusinessDate()/cada evaluador, que lo llaman por
+ * su cuenta) lee cookies() -- y Next.js rechaza explícitamente leer
+ * cookies() DENTRO del callback de after() ("used cookies() inside after()
+ * while rendering. This is not supported"), aunque ya se haya leído antes
+ * en el mismo request (AppShell ya llama getLocale()/getCurrentUserHotel()
+ * antes de esto). Por eso el cliente se construye AQUÍ, antes de llamar
+ * after(), y se inyecta en evaluateHotelRules() (que a su vez lo pasa a
+ * getHotelBusinessDate() y a cada evaluador vía EvaluatorContext.
+ * supabaseClient) -- el callback de after() nunca vuelve a tocar cookies().
+ */
+const EVALUATION_COOLDOWN_MS = 3 * 60 * 1000;
+const lastEvaluatedAt = new Map<string, number>();
+
+export async function scheduleHotelRuleEvaluation(hotelId: string): Promise<void> {
+  const now = Date.now();
+  const last = lastEvaluatedAt.get(hotelId) ?? 0;
+  if (now - last < EVALUATION_COOLDOWN_MS) return;
+  lastEvaluatedAt.set(hotelId, now);
+
+  const supabase = await createClient();
+  after(() => {
+    evaluateHotelRules(hotelId, supabase).catch((error) => {
+      console.error(`evaluateHotelRules(${hotelId}) failed`, error);
+    });
+  });
 }

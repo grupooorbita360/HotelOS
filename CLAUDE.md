@@ -2874,6 +2874,92 @@ de `hotel_rules`, visible por RLS al usuario del hotel. Hold liberado y
 prioridad descartada (`dismiss_hotel_priority()`, motivo explícito) al
 terminar, para no dejar el demo con datos sintéticos activos.
 
+### Conexión real del motor: `AppShell` + `after()` (propuesta aprobada)
+
+El hallazgo de arriba ("nadie invoca `evaluateHotelRules()`") se cerró en
+la misma ronda. Se evaluaron tres opciones (cargar el motor en cada página
+de módulo por separado; un Server Action dedicado disparado desde
+`AppShell`; algo más simple) y se aprobó la de `AppShell`, con dos ajustes
+propuestos y aprobados antes de construir:
+
+- **Un solo punto de invocación**, no uno por página: `AppShell`
+  (`src/components/ui/AppShell.tsx`) ya es el único componente compartido
+  por las 5 páginas de módulo (async desde P1-2) y ya recibe `hotelId` --
+  evaluar sólo en `/recepcion` habría dejado sin cobertura
+  `HOLD_EXPIRING_SOON` mientras el usuario está en `/reservaciones`, que es
+  donde de hecho se gestionan los Holds.
+- **`after()` (`next/server`, estable desde Next 15)** para que la
+  evaluación corra DESPUÉS de que la respuesta ya se mandó al navegador --
+  ninguna página paga la latencia de evaluar todas las reglas del hotel
+  sólo por cargar.
+- **Cooldown en memoria de 3 minutos por hotel** (`scheduleHotelRuleEvaluation()`,
+  `src/modules/priorities/engine.ts`) -- mismo patrón exacto que el cache
+  de 45s de `getRackGrid()` (ver sección Rack): un `Map<hotelId, timestamp>`
+  por proceso, no distribuido. Sin esto, cada navegación repetiría la
+  evaluación completa -- desperdicio real de trabajo, no sólo de latencia.
+  A diferencia del cache de lectura del Rack (donde servir una copia vieja
+  sí sería un problema), aquí el peor caso de un despliegue multi-instancia
+  es evaluar de más, nunca de menos -- no hace falta que sea distribuido.
+
+**Excepción documentada a la regla 7 (los módulos no se importan entre
+sí):** `AppShell` (`src/components/ui/`) importa
+`scheduleHotelRuleEvaluation()` de `src/modules/priorities/engine.ts`. No
+es una violación silenciosa -- se decidió así porque `AppShell` no es un
+módulo de negocio (es infraestructura de UI compartida por los 5), y
+porque no existe una vía equivalente a un RPC de Postgres para "disparar"
+un orquestador que vive enteramente en TypeScript (a diferencia de Rack
+llamando `assign_room()` por RPC en vez de importar Recepción). La
+alternativa -- que cada una de las 5 páginas de módulo importara y llamara
+esto por su cuenta -- habría violado la regla 6 (duplicación) de forma
+mucho más severa que esta única importación central.
+
+**Bug real encontrado probando esto contra Supabase real (no sólo local):**
+`after()` corre DESPUÉS de que la respuesta ya se envió, y Next.js
+**prohíbe explícitamente leer `cookies()` dentro de ese callback** --
+`createClient()` (`src/lib/supabase/server.ts`) las lee para resolver la
+sesión, así que cualquier llamada a `createClient()` (directa o indirecta)
+dentro del callback de `after()` falla con `"used cookies() inside
+after() while rendering. This is not supported."`, aunque `cookies()` ya
+se hubiera leído antes en el mismo request (`AppShell` ya llama
+`getLocale()`/`getCurrentUserHotel()` antes de esto). Esto no es un caso
+raro: **tres funciones distintas** en la cadena de `evaluateHotelRules()`
+llaman `createClient()` por su cuenta -- la propia función,
+`getHotelBusinessDate()`, cada evaluador (`arrivalNotRegisteredEvaluator()`/
+`holdExpiringSoonEvaluator()`), y `logTimelineEvent()` -- se encontraron
+una por una, en ese orden, según Next.js fue señalando cada punto de falla
+sucesivo al corregir el anterior.
+
+Corregido dando a las cuatro un parámetro **opcional** `supabaseClient`
+(o, en `EvaluatorContext`, un campo `supabaseClient`) que, si viene, se usa
+en vez de llamar `createClient()`: `scheduleHotelRuleEvaluation()` -- que
+sí corre ANTES de `after()`, en el render normal -- construye el cliente
+una sola vez ahí y lo inyecta en `evaluateHotelRules()`, que a su vez lo
+reenvía a `getHotelBusinessDate()`, a cada evaluador vía
+`EvaluatorContext.supabaseClient`, y a `logTimelineEvent()` -- ningún
+código dentro del callback de `after()` vuelve a tocar `cookies()`. Las
+cuatro funciones son **retrocompatibles**: `getHotelBusinessDate()` tiene
+otros tres call sites (Rack, Reservaciones, Caja) y `logTimelineEvent()`
+tiene decenas en todo el proyecto -- ninguno pasa el parámetro nuevo, así
+que ninguno cambia de comportamiento.
+
+**Validado en vivo contra Hotel Demo real** (Playwright, sin invocar el
+motor a mano en ningún punto): se forzó una estancia `expected` con
+`check_in` en el pasado (candidata real de `ARRIVAL_NOT_REGISTERED`) y un
+Hold con `expires_at` a 10 minutos (candidato real de `HOLD_EXPIRING_SOON`),
+se confirmó que **ninguna** prioridad existía todavía para esos dos
+`dedupe_key`, y se navegó la app una sola vez (login → `/reservaciones`)
+-- después de esa única navegación, **ambas prioridades aparecieron
+solas** en `hotel_priorities`, con `severity`/`priority_score`/`category`
+correctos derivados de `hotel_rules` y `created_by = null` (firma de
+`service_role`, mismo trade-off ya documentado en 0038). Cooldown: se
+descartó la prioridad de `HOLD_EXPIRING_SOON` (`dismiss_hotel_priority()`)
+y se navegó la app de inmediato otra vez (mismo proceso de Node, dentro de
+la ventana de 3 minutos) -- la fila siguió `DISMISSED`, sin ninguna fila
+`OPEN` nueva para el mismo `dedupe_key`, confirmando que la segunda
+navegación no volvió a evaluar. Datos sintéticos de la prueba limpiados al
+terminar (Hold liberado, `check_in` restaurado, ambas prioridades
+descartadas con motivo explícito).
+
 ## Convenciones de nombres
 
 - **Tablas y columnas de Postgres**: `snake_case`, tablas en plural
