@@ -138,6 +138,7 @@ export async function submitUpdateHotelPolicies(formData: FormData) {
       standardCheckinTime: String(formData.get("standardCheckinTime")),
       standardCheckoutTime: String(formData.get("standardCheckoutTime")),
       ivaPorcentaje: Number(formData.get("ivaPorcentaje") || 0),
+      holdDurationMinutes: Number(formData.get("holdDurationMinutes") || 0),
     }),
   );
 }

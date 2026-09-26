@@ -241,6 +241,7 @@ export interface Database {
           checkin_assets: Json;
           extra_settings: Json;
           iva_porcentaje: number;
+          hold_duration_minutes: number;
           created_at: string;
           created_by: string | null;
           updated_at: string;
@@ -256,6 +257,7 @@ export interface Database {
           checkin_assets?: Json;
           extra_settings?: Json;
           iva_porcentaje?: number;
+          hold_duration_minutes?: number;
         };
         Update: Partial<Database["public"]["Tables"]["hotel_policies"]["Insert"]>;
         Relationships: [];

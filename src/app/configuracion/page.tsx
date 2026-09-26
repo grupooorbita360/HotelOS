@@ -531,10 +531,23 @@ export default async function ConfiguracionPage({
                       defaultValue={hotelPolicies.iva_porcentaje}
                     />
                   </Field>
+                  <Field label="Duración del Hold (minutos)">
+                    <TextInput
+                      name="holdDurationMinutes"
+                      type="number"
+                      min={1}
+                      step="1"
+                      defaultValue={hotelPolicies.hold_duration_minutes}
+                    />
+                  </Field>
                 </div>
                 <p className="text-xs text-muted">
                   Varía por región (16% general, 8% en zona fronteriza). Solo para desglose contable/reportes — no
                   cambia las tarifas ni montos que ya ves en Reservaciones y Recepción.
+                </p>
+                <p className="text-xs text-muted">
+                  Cuánto tiempo se aparta el inventario de un Hold (mientras el huésped paga) antes de liberarse
+                  solo. Default 120 (2 horas).
                 </p>
                 <Button>Guardar políticas</Button>
               </form>

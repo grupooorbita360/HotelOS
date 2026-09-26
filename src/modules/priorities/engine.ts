@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getHotelBusinessDate } from "@/lib/getHotelBusinessDate";
 import { logTimelineEvent } from "@/lib/events/timeline";
 import { arrivalNotRegisteredEvaluator } from "./evaluators/arrivalNotRegistered";
+import { holdExpiringSoonEvaluator } from "./evaluators/holdExpiringSoon";
 import type { RuleEvaluator } from "./types";
 
 /**
@@ -14,6 +15,7 @@ import type { RuleEvaluator } from "./types";
  */
 const EVALUATORS: Record<string, RuleEvaluator> = {
   ARRIVAL_NOT_REGISTERED: arrivalNotRegisteredEvaluator,
+  HOLD_EXPIRING_SOON: holdExpiringSoonEvaluator,
 };
 
 export interface RuleEvaluationSummary {

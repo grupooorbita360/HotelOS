@@ -13,12 +13,16 @@ export interface HotelPoliciesInput {
   standardCheckinTime: string;
   standardCheckoutTime: string;
   ivaPorcentaje: number;
+  holdDurationMinutes: number;
 }
 
 export async function updateHotelPolicies(hotelId: string, input: HotelPoliciesInput) {
   await requirePermission(hotelId, "hotel.settings.manage");
   if (input.ivaPorcentaje < 0 || input.ivaPorcentaje > 100) {
     throw new Error("El IVA debe estar entre 0 y 100.");
+  }
+  if (input.holdDurationMinutes <= 0) {
+    throw new Error("La duración del Hold debe ser mayor a 0 minutos.");
   }
 
   const supabase = await createClient();
@@ -32,6 +36,7 @@ export async function updateHotelPolicies(hotelId: string, input: HotelPoliciesI
       standard_checkin_time: input.standardCheckinTime,
       standard_checkout_time: input.standardCheckoutTime,
       iva_porcentaje: input.ivaPorcentaje,
+      hold_duration_minutes: input.holdDurationMinutes,
     })
     .eq("hotel_id", hotelId);
   if (error) throw error;

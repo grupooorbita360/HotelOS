@@ -10,6 +10,13 @@ import { createClient } from "@/lib/supabase/server";
  * bloqueo atómico -- nunca antes. fechas/tipo se leen de la opción ya
  * persistida (nunca del cliente) para no confiar en datos que el navegador
  * pudiera alterar.
+ *
+ * holdMinutes explícito sigue permitido para un caller futuro que necesite
+ * un valor puntual distinto (el parámetro de attempt_inventory_hold(),
+ * 0016, siempre lo aceptó) -- pero si no se manda, ya no cae en el default
+ * de 24h de SQL: se lee hotel_policies.hold_duration_minutes (P2-2),
+ * configurable por hotel, mismo criterio de "la política vive en
+ * hotel_policies, nunca hardcodeada" que el resto del proyecto.
  */
 export async function createHoldFromQuoteOption(hotelId: string, quoteOptionId: string, holdMinutes?: number) {
   await requirePermission(hotelId, "reservations.create");
@@ -23,13 +30,24 @@ export async function createHoldFromQuoteOption(hotelId: string, quoteOptionId: 
     .single();
   if (optionError) throw optionError;
 
+  let effectiveHoldMinutes = holdMinutes;
+  if (effectiveHoldMinutes === undefined) {
+    const { data: policies, error: policiesError } = await supabase
+      .from("hotel_policies")
+      .select("hold_duration_minutes")
+      .eq("hotel_id", hotelId)
+      .single();
+    if (policiesError) throw policiesError;
+    effectiveHoldMinutes = policies.hold_duration_minutes;
+  }
+
   const { data: hold, error } = await supabase.rpc("attempt_inventory_hold", {
     p_hotel_id: hotelId,
     p_room_type_id: option.room_type_id,
     p_check_in: option.check_in,
     p_check_out: option.check_out,
     p_quote_option_id: option.id,
-    p_hold_minutes: holdMinutes ?? null,
+    p_hold_minutes: effectiveHoldMinutes,
   });
   if (error) throw error;
 
