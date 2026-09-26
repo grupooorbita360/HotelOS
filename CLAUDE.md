@@ -227,6 +227,8 @@ lectura recomendado (las migraciones dependen unas de otras en este orden):
 | `0058_room_deactivation_estimated_date.sql` | `rooms.estimated_available_at`; `deactivate_room()` gana `p_estimated_available_at` opcional (drop + create, cambia la firma), `reactivate_room()` la limpia (P1-12, ver "Handoff de demo P1, Tanda 2") |
 | `0059_timeline_events_platform_admin_insert.sql` | Fix: policy de INSERT de `timeline_events` no dejaba a `platform_admin` registrar `hotel.created` al dar de alta un hotel (no es miembro del hotel nuevo todavía) -- policy paralela `OR is_platform_admin()`. Traída por PR #22 (`fix/timeline-events-rls`); llegó commiteada en la raíz del repo por un rename accidental, reubicada a `supabase/migrations/` en esta rama sin cambio de contenido |
 | `0060_hold_duration_and_expiring_priority.sql` | `hotel_policies.hold_duration_minutes` (default 120, reemplaza el placeholder nunca implementado en `extra_settings` que ya mencionaba el comentario original de `0013`); `createHoldFromQuoteOption()` lo lee cuando no se pasa `holdMinutes` explícito; regla nueva del Motor de Prioridades `HOLD_EXPIRING_SOON` + evaluador `holdExpiringSoonEvaluator()` (P2-2) |
+| `0061_service_item_routing.sql` | `guest_requests`/`stay_incidents` ganan `assigned_area` (`housekeeping`/`maintenance`) + `assigned_to`; catálogo de `status` ampliado (`assigned`, y `in_progress` en incidencias) -- enrutamiento mínimo de solicitudes/incidencias a quien las atiende (P2-3) |
+| `0062_fix_reset_demo_hotel_cash_movements_fk.sql` | Fix: `reset_demo_hotel()` no borraba `cash_movements`/`cash_shifts` del hotel demo -- con movimientos de Caja reales de por medio, el wipe fallaba con `cash_movements_stay_transaction_id_fkey` al intentar borrar `stay_transactions` (ver sección "Caja (0046)" más abajo) |
 
 **Nota sobre el hueco en 0049 y la reconciliación de `feature/demo-reset`
 (commit `2ab7580`):** `feature/demo-reset` es una rama remota que se
@@ -2959,6 +2961,71 @@ la ventana de 3 minutos) -- la fila siguió `DISMISSED`, sin ninguna fila
 navegación no volvió a evaluar. Datos sintéticos de la prueba limpiados al
 terminar (Hold liberado, `check_in` restaurado, ambas prioridades
 descartadas con motivo explícito).
+
+### Bug real: `reset_demo_hotel()` no contemplaba `cash_movements`/`cash_shifts` (0062)
+
+Encontrado al intentar reiniciar el Hotel Demo para probar la conexión del
+Motor de Prioridades (arriba) -- para ese momento, la sesión ya había
+generado movimientos de Caja reales contra el Hotel Demo (turno abierto,
+cobros/reembolsos vía `register_payment_with_movements()`, ver sección
+"Caja (0046)"). Llamar `reset_demo_hotel()` con esos datos de por medio
+falló con:
+
+```
+update or delete on table "stay_transactions" violates foreign key
+constraint "cash_movements_stay_transaction_id_fkey" on table
+"cash_movements"
+```
+
+**Causa raíz**: `cash_movements.stay_transaction_id` y
+`cash_movements.payment_movement_id` (0046) no tienen `on delete cascade`
+-- a diferencia de `payments.reservation_id`/`guarantees.reservation_id`
+(0017) o `payment_movements.payment_id` (0046), que sí la tienen. La
+función de wipe de `reset_demo_hotel()` (0050, recreada en 0053/0054/0055)
+es de antes de que Caja (0046) existiera y nunca se actualizó para
+contemplar `cash_movements`/`cash_shifts` -- ninguna de las dos se borraba
+en ningún punto de la función. Mismo tipo de hallazgo que ya documentó la
+sección de Rack para la migración `0033` sin aplicar y que 0053/0054 ya
+encontraron para `leads`/`inventory_holds`: que este archivo documente que
+un wipe "ya se validó" no es garantía de que siga cubriendo todo lo que el
+esquema fue agregando después.
+
+**Diferencia real con el patrón 0053/0054** (importante para no repetir el
+error a la primera lectura): el pedido inicial fue "desvincular
+`cash_movements` antes de borrar `stay_transactions`, mismo patrón que
+0053/0054". Investigado antes de aplicarlo literal: el patrón de 0053/0054
+funciona porque en ambos casos la fila que queda con la referencia en
+`null` (el lead, el Hold) **se borra ella misma unas líneas después en la
+misma función** -- desvincular ahí es sólo un paso intermedio antes de un
+delete real, nunca un estado final. Aquí no hay ningún delete de
+`cash_movements`/`cash_shifts` en ningún punto de `reset_demo_hotel()`:
+poner sus FKs en `null` y nunca borrar la fila habría dejado huérfanos
+permanentes acumulándose en cada reset futuro. Por eso el fix real
+(`0062_fix_reset_demo_hotel_cash_movements_fk.sql`) **borra** ambas tablas
+(scoped a `hotel_id = v_hotel_id`, como las otras 16 tablas del wipe) en
+vez de desvincular sus columnas -- `cash_movements` primero (su propia FK a
+`cash_shifts`, `cash_shift_id`, tampoco tiene cascada), luego
+`cash_shifts`, ambas antes de `stay_transactions`. `payment_methods`/
+`cash_settings` (config del hotel, mismo nivel que `hotel_policies`/
+`reception_settings`) se conservan sin tocar -- no son datos operativos del
+ciclo de vida que este wipe reinicia.
+
+Recreación completa de la función (`create or replace`, misma firma) desde
+la versión de 0055 -- mismo criterio ya usado en 0053/0054/0055: no se
+puede insertar dos líneas en medio de una función ya aplicada sin repetir
+el cuerpo entero.
+
+**Pendiente de validar en vivo** (ver reporte de esta ronda): esta sesión
+no tiene credencial de conexión directa a Postgres -- igual que
+`0056`-`0058`, la migración se le pasó al dueño del producto para
+aplicarla por el SQL Editor de Supabase. Una vez aplicada, la prueba
+pendiente es exactamente la que motivó el fix: llamar `reset_demo_hotel()`
+con los movimientos de Caja reales de esta sesión todavía presentes (turno
+abierto, cobros divididos, ajustes) y confirmar que corre limpio sin el
+error de foreign key, que `cash_movements`/`cash_shifts` del hotel demo
+quedan en cero filas después (sin huérfanos), y que `payment_methods` (los
+2 métodos sembrados por hotel) sobrevive intacto por ser config que este
+wipe no toca.
 
 ## Convenciones de nombres
 
